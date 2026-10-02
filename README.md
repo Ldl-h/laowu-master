@@ -97,6 +97,23 @@ xuanxue-core/
 
 ---
 
+## 📥 离线数据包下载与安装 (Data Assets Setup)
+
+为了保持代码仓库的极度精简与极速拉取，底层 ~138 MB 的预编译二值化数据库资产并未直接提交至 Git 历史，而是托管在 **[GitHub Releases (v0.1.0)](https://github.com/Ldl-h/xuanxue-core/releases/tag/v0.1.0)** 中：
+
+1. 从 Release 页面下载 **[`data.tar.gz`](https://github.com/Ldl-h/xuanxue-core/releases/download/v0.1.0/data.tar.gz)**。
+2. 解压至项目根目录，确保生成 `data/` 文件夹：
+   ```bash
+   # Linux / macOS / Git Bash
+   tar -xzvf data.tar.gz
+
+   # Windows PowerShell
+   tar -xzvf data.tar.gz
+   ```
+3. 也可以直接下载预编译好的发布单体程序 **[`xuanxue-core.exe`](https://github.com/Ldl-h/xuanxue-core/releases/download/v0.1.0/xuanxue-core.exe)** 配合 `data/` 即可直接运行。
+
+---
+
 ## 🚀 极速上手与 CLI 指南
 
 ### 1. 自省与规范检索
