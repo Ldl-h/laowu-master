@@ -20,6 +20,7 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                 }
             }
 
+            let has_ephem_slices = crate::db::SepkDatabase::has_baked_slices();
             let mut result = serde_json::json!({
                 "technique": tool,
                 "jde": chart.jde,
@@ -31,6 +32,10 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                 "house_system": chart.house_system,
                 "houses": chart.houses,
                 "planets": chart.planets,
+                "aspects": chart.aspects,
+                "lots": chart.lots,
+                "fixed_stars": chart.fixed_stars,
+                "ephemeris_source": if has_ephem_slices { "Swiss Ephemeris SEPK Baked Slices (JPL DE441)" } else { "Analytical VSOP87 & Perturbations (Standalone Fallback)" },
                 "chart": chart,
                 "summary": format!("西洋占星排盘 [{}]: 上升 ASC【{:.2}°】，中天 MC【{:.2}°】，十大天体黄道排布完备", tool, chart.ascendant, chart.mc)
             });

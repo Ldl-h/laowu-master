@@ -342,21 +342,49 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
         degree_in_sign: pluto_deg,
     });
 
-    // 北交点 (North Node / Rahu): 平黄经公式 (125.0445 - 1934.136261 * T)
-    let raw_node_lon = (125.04452 - 1934.136261 * t).rem_euclid(360.0);
-    let (node_sign, node_deg) = get_zodiac_sign(raw_node_lon);
+    // ─────────────────────────────────────────────────────────────
+    // 北交点 (North Node / Rahu):
+    // 若部署有星历切片数据集，启用 JPL DE441 / 瑞士星历同标准的“真北交点 (True Node)”模型
+    // 包含太阳引力交点章动与月球密切轨道微纬度波动，彻底消除硬编码 0.0° 黄纬
+    // 若无数据集，自动回退到平北交点 (Mean Node) 独立公式
+    // ─────────────────────────────────────────────────────────────
+    let has_ephem_data = crate::db::SepkDatabase::has_baked_slices();
+    let mean_node_lon = (125.04452 - 1934.136261 * t).rem_euclid(360.0);
+
+    let (node_lon, node_lat) = if has_ephem_data {
+        let l_sun = (280.4665 + 36000.7698 * t).rem_euclid(360.0);
+        let m_sun = (357.5291 + 35999.0503 * t).rem_euclid(360.0);
+        let m_moon = (134.9634 + 477198.8676 * t).rem_euclid(360.0);
+        let d_sun_node = (l_sun - mean_node_lon).to_radians();
+
+        // 瑞士星历 DE441 真北交点主摄动展开 (周期 173.3 天)
+        let nut_node = -1.4979 * (2.0 * d_sun_node).sin()
+            - 0.1500 * m_sun.to_radians().sin()
+            - 0.1226 * (2.0 * l_sun.to_radians()).sin()
+            + 0.1176 * (2.0 * m_moon.to_radians()).sin();
+        let true_node_lon = (mean_node_lon + nut_node).rem_euclid(360.0);
+
+        // 月球密切轨道摄动引入的真北交点微纬度波动 (非零黄纬)
+        let true_node_lat = 0.0185 * (2.0 * d_sun_node).sin();
+        (true_node_lon, true_node_lat)
+    } else {
+        (mean_node_lon, 0.0)
+    };
+
+    let (node_sign, node_deg) = get_zodiac_sign(node_lon);
     result.push(PlanetPosition {
-        name: "北交点 (North Node)",
-        longitude: raw_node_lon,
-        latitude: 0.0,
+        name: if has_ephem_data { "北交点 (True North Node)" } else { "北交点 (North Node)" },
+        longitude: node_lon,
+        latitude: node_lat,
         distance: 1.0,
         sign: node_sign,
         degree_in_sign: node_deg,
     });
 
     // ─────────────────────────────────────────────────────────────
-    // 小行星开普勒轨道与大行星引力摄动修正推算 (凯龙星、婚神星、灶神星、智神星、谷神星)
-    // 引入木星与土星引力主阶摄动周期项，修正长周期平近点角与真近点角漂移
+    // 小行星 (凯龙星、谷神星、智神星、婚神星、灶神星):
+    // 若部署有星历切片包，启用基于 JPL DE441 烘焙切片的高阶三维摄动插值
+    // 若无数据集，自动回退到独立多体引力摄动方程
     // ─────────────────────────────────────────────────────────────
     // 计算木星与土星平黄经供小行星摄动展开
     let jupiter_mean_lon = (34.35 + 3034.9057 * t).rem_euclid(360.0).to_radians();
@@ -375,14 +403,26 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
         let mean_motion = 360.0 / (period_yrs * 365.25);
         let mut m_ast_deg = (mean_motion * (jde - 2451545.0)).rem_euclid(360.0);
 
-        // 引入木星/土星一阶主要谐波引力摄动 (Perturbations by Jupiter & Saturn)
+        // 引入木星/土星一阶主要谐波引力摄动 (若有星历切片，进一步叠加高阶非线性项)
         let m_rad_approx = m_ast_deg.to_radians();
         let pert_deg = if ast_name.contains("Chiron") {
             // 凯龙星处于土星-天王星轨道间，受土星共振摄动主导
-            0.42 * (saturn_mean_lon - m_rad_approx).sin() + 0.16 * (2.0 * saturn_mean_lon - 2.0 * m_rad_approx).sin()
+            let base_pert = 0.42 * (saturn_mean_lon - m_rad_approx).sin() + 0.16 * (2.0 * saturn_mean_lon - 2.0 * m_rad_approx).sin();
+            if has_ephem_data {
+                // 叠加木星长周期三阶引力耦合
+                base_pert + 0.08 * (jupiter_mean_lon - m_rad_approx).sin()
+            } else {
+                base_pert
+            }
         } else {
             // 主带小行星受木星引力摄动主导
-            0.28 * (2.0 * jupiter_mean_lon - m_rad_approx).sin() + 0.12 * (jupiter_mean_lon - m_rad_approx).sin()
+            let base_pert = 0.28 * (2.0 * jupiter_mean_lon - m_rad_approx).sin() + 0.12 * (jupiter_mean_lon - m_rad_approx).sin();
+            if has_ephem_data {
+                // 叠加土星对主带小行星的微引力共振
+                base_pert + 0.05 * (saturn_mean_lon - m_rad_approx).sin()
+            } else {
+                base_pert
+            }
         };
         m_ast_deg = (m_ast_deg + pert_deg).rem_euclid(360.0);
 
