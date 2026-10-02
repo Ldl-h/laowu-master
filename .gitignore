@@ -1,0 +1,30 @@
+# Data assets (download from GitHub Releases)
+data/
+*.bin
+*.tar.gz
+*.zip
+
+# Binaries
+xuanxue-core.exe
+*.exe
+
+# Rust build artifacts
+target/
+**/*.rs.bk
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.ruff_cache/
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+.pi-lens/
+
+# OS files
+.DS_Store
+Thumbs.db
