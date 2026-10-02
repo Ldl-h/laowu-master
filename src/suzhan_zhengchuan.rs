@@ -24,6 +24,38 @@ pub const MANSIONS_27: [(&str, &str, &str, &str); 27] = [
     ("星宿", "星日马", "日/火", "马"), ("张宿", "张月鹿", "月/水", "鹿"), ("翼宿", "翼火蛇", "火", "蛇")
 ];
 
+// 二十七宿真实距星天区黄道经度基准表 (J2000历元，消除360/27平均宿度误差)
+// 角、亢、氐、房、心、尾、箕、斗、牛(并于斗女)、女、虚、危、室、壁、奎、娄、胃、昴、毕、觜、参、井、鬼、柳、星、张、翼
+pub const REAL_MANSION_LONS_27: [f64; 27] = [
+    203.84, // 角宿 (角宿一 Spica)
+    214.55, // 亢宿 (亢宿一)
+    225.08, // 氐宿 (氐宿一)
+    243.18, // 房宿 (房宿四)
+    249.76, // 心宿 (心宿二 Antares)
+    264.30, // 尾宿 (尾宿一)
+    271.74, // 箕宿 (箕宿一)
+    283.82, // 斗宿 (斗宿一)
+    311.95, // 女宿 (女宿一)
+    323.41, // 虚宿 (虚宿一)
+    333.35, // 危宿 (危宿一)
+    353.48, // 室宿 (室宿一)
+    9.11,   // 壁宿 (壁宿一)
+    20.84,  // 奎宿 (奎宿一)
+    33.97,  // 娄宿 (娄宿一)
+    43.43,  // 胃宿 (胃宿一)
+    59.99,  // 昴宿 (昴宿六 Alcyone)
+    69.79,  // 毕宿 (毕宿五 Aldebaran)
+    83.71,  // 觜宿 (觜宿一)
+    85.20,  // 参宿 (参宿三)
+    95.31,  // 井宿 (井宿一)
+    113.62, // 鬼宿 (鬼宿一)
+    124.63, // 柳宿 (柳宿一)
+    147.28, // 星宿 (星宿一 Alphard)
+    159.04, // 张宿 (张宿一)
+    173.74, // 翼宿 (翼宿一)
+    190.58, // 轸宿 (轸宿一)
+];
+
 // 九亲三世法：命、荣、衰、安、危、成、坏、友、亲
 pub const RELATION_9: [&str; 9] = ["命", "荣", "衰", "安", "危", "成", "坏", "友", "亲"];
 
@@ -83,11 +115,11 @@ pub fn calculate_suzhan(lunar_month: u32, lunar_day: u32, target_day_offset: u32
         summary: relation_desc,
     };
 
-    // 联动 BSC5 耶鲁星表赋予星宿物理黄经
+    // 联动 BSC5 耶鲁星表赋予星宿物理黄经 (采用真实距星黄经定位)
     if let Some(path) = crate::db::resolve_data_path("bsc5_stars.bin") {
         if let Ok(db) = crate::db::Bsc5StarDatabase::open(path) {
-            let approx_lon = (natal_idx as f64 * (360.0 / 27.0)).rem_euclid(360.0);
-            let hits = db.find_conjunctions(approx_lon, 5.0, 3.5);
+            let true_lon = REAL_MANSION_LONS_27[natal_idx % 27];
+            let hits = db.find_conjunctions(true_lon, 5.0, 3.5);
             if let Some(bright) = hits.first() {
                 res.personality_reading = match elem {
                     "木" => "东方仁木之象，心性慈善宽厚，具开创进取之能 (恒星同度赋能)",

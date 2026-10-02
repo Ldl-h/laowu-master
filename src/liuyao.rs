@@ -27,6 +27,65 @@ pub const BAGUA_LINES: [u8; 8] = [7, 3, 5, 1, 6, 2, 4, 0];
 // 京房八宫五行
 pub const GONG_WUXING: [&str; 8] = ["金", "金", "火", "木", "木", "水", "土", "土"];
 
+// 八纯卦纳甲天干与地支
+// 乾(0): 内甲子甲寅甲辰, 外壬午壬申壬戌
+// 兑(1): 内丁巳丁卯丁丑, 外丁亥丁酉丁未
+// 离(2): 内己卯己丑己亥, 外己酉己未己巳
+// 震(3): 内庚子庚寅庚辰, 外庚午庚申庚戌
+// 巽(4): 内辛丑辛亥辛酉, 外辛未辛巳辛卯
+// 坎(5): 内戊寅戊辰戊午, 外戊申戊戌戊子
+// 艮(6): 内丙辰丙午丙申, 外丙戌丙子丙寅
+// 坤(7): 内乙未乙巳乙卯, 外癸丑癸亥癸酉
+pub const NAJIA_TABLE: [[(&str, &str); 6]; 8] = [
+    // 乾 (0)
+    [("甲", "子"), ("甲", "寅"), ("甲", "辰"), ("壬", "午"), ("壬", "申"), ("壬", "戌")],
+    // 兑 (1)
+    [("丁", "巳"), ("丁", "卯"), ("丁", "丑"), ("丁", "亥"), ("丁", "酉"), ("丁", "未")],
+    // 离 (2)
+    [("己", "卯"), ("己", "丑"), ("己", "亥"), ("己", "酉"), ("己", "未"), ("己", "巳")],
+    // 震 (3)
+    [("庚", "子"), ("庚", "寅"), ("庚", "辰"), ("庚", "午"), ("庚", "申"), ("庚", "戌")],
+    // 巽 (4)
+    [("辛", "丑"), ("辛", "亥"), ("辛", "酉"), ("辛", "未"), ("辛", "巳"), ("辛", "卯")],
+    // 坎 (5)
+    [("戊", "寅"), ("戊", "辰"), ("戊", "午"), ("戊", "申"), ("戊", "戌"), ("戊", "子")],
+    // 艮 (6)
+    [("丙", "辰"), ("丙", "午"), ("丙", "申"), ("丙", "戌"), ("丙", "子"), ("丙", "寅")],
+    // 坤 (7)
+    [("乙", "未"), ("乙", "巳"), ("乙", "卯"), ("癸", "丑"), ("癸", "亥"), ("癸", "酉")],
+];
+
+pub fn get_zhi_wuxing(zhi: &str) -> &'static str {
+    match zhi {
+        "寅" | "卯" => "木",
+        "巳" | "午" => "火",
+        "申" | "酉" => "金",
+        "亥" | "子" => "水",
+        _ => "土", // 辰 戌 丑 未
+    }
+}
+
+pub fn get_liuqin(gong_wuxing: &str, zhi: &str) -> &'static str {
+    let z_wx = get_zhi_wuxing(zhi);
+    let wx_idx = |w: &str| match w {
+        "木" => 0,
+        "火" => 1,
+        "土" => 2,
+        "金" => 3,
+        _ => 4, // 水
+    };
+    let me = wx_idx(gong_wuxing);
+    let other = wx_idx(z_wx);
+    let diff = (other + 5 - me) % 5;
+    match diff {
+        0 => "兄弟",
+        1 => "子孙",
+        2 => "妻财",
+        3 => "官鬼",
+        _ => "父母",
+    }
+}
+
 // 六神 (青龙, 朱雀, 勾陈, 螣蛇, 白虎, 玄武)
 pub const LIU_SHEN: [&str; 6] = ["青龙", "朱雀", "勾陈", "螣蛇", "白虎", "玄武"];
 
@@ -38,6 +97,12 @@ pub struct YaoDetail {
     pub is_shi: bool,              // 是否世爻
     pub is_ying: bool,             // 是否应爻
     pub liu_shen: &'static str,    // 六神神煞
+    pub na_jia: &'static str,      // 纳甲天干
+    pub na_zhi: &'static str,      // 纳支地支
+    pub liu_qin: &'static str,     // 本爻六亲
+    pub bian_na_jia: Option<&'static str>, // 变爻纳甲
+    pub bian_na_zhi: Option<&'static str>, // 变爻纳支
+    pub bian_liu_qin: Option<&'static str>, // 变爻六亲
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -54,7 +119,7 @@ pub struct SixYaoResult {
     pub yaos: Vec<YaoDetail>,       // 六爻精细全息切片
 }
 
-/// 纯数学按数起卦 / 时间起卦 (邵康节梅花心易法 + 京房纳甲世应)
+/// 纯数学按数起卦 / 时间起卦 (邵康节梅花心易法 + 京房纳甲世应与六亲变爻)
 pub fn calculate_liuyao(num1: usize, num2: usize, num3: usize) -> SixYaoResult {
     // 1. 上卦 = num1 % 8 (0为坤8)
     let shang_idx = (num1 % 8 + 7) % 8;
@@ -98,17 +163,47 @@ pub fn calculate_liuyao(num1: usize, num2: usize, num3: usize) -> SixYaoResult {
     let bian_shang_idx = BAGUA_LINES.iter().position(|&b| b == bian_shang_bin).unwrap_or(0);
     let bian_gua = GUA64[bian_shang_idx][bian_xia_idx];
 
-    // 构建六爻精细切片
+    let gong_wuxing = GONG_WUXING[gong_idx];
+
+    // 构建六爻精细切片 (纳甲 + 纳支 + 六亲 + 六神 + 变爻)
     let mut yaos = Vec::with_capacity(6);
     for i in 1..=6 {
         let bit = (total_bin >> (i - 1)) & 1;
+        let is_moving = i == moving_yao;
+
+        // 本卦纳甲纳支
+        let (na_jia, na_zhi) = if i <= 3 {
+            NAJIA_TABLE[xia_idx][i - 1]
+        } else {
+            NAJIA_TABLE[shang_idx][i - 1]
+        };
+        let liu_qin = get_liuqin(gong_wuxing, na_zhi);
+
+        // 动爻产生变卦纳甲
+        let (bian_na_jia, bian_na_zhi, bian_liu_qin) = if is_moving {
+            let (bg_g, bg_z) = if i <= 3 {
+                NAJIA_TABLE[bian_xia_idx][i - 1]
+            } else {
+                NAJIA_TABLE[bian_shang_idx][i - 1]
+            };
+            (Some(bg_g), Some(bg_z), Some(get_liuqin(gong_wuxing, bg_z)))
+        } else {
+            (None, None, None)
+        };
+
         yaos.push(YaoDetail {
             yao_index: i,
             yin_yang: if bit == 1 { "阳爻 (⚊)" } else { "阴爻 (⚋)" },
-            is_moving: i == moving_yao,
+            is_moving,
             is_shi: i == shi_yao,
             is_ying: i == ying_yao,
             liu_shen: LIU_SHEN[i - 1],
+            na_jia,
+            na_zhi,
+            liu_qin,
+            bian_na_jia,
+            bian_na_zhi,
+            bian_liu_qin,
         });
     }
 
@@ -117,7 +212,7 @@ pub fn calculate_liuyao(num1: usize, num2: usize, num3: usize) -> SixYaoResult {
         xia_gua: BAGUA[xia_idx],
         original_gua,
         gong_name: BAGUA[gong_idx],
-        gong_wuxing: GONG_WUXING[gong_idx],
+        gong_wuxing,
         shi_yao,
         ying_yao,
         moving_yao,

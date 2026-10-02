@@ -34,33 +34,31 @@ pub const LUNAR_MONTH_NAMES: [&str; 12] = [
     "七月", "八月", "九月", "十月", "十一月", "腊月"
 ];
 
+pub const LUNAR_LEAP_MONTH_NAMES: [&str; 12] = [
+    "闰正月", "闰二月", "闰三月", "闰四月", "闰五月", "闰六月",
+    "闰七月", "闰八月", "闰九月", "闰十月", "闰十一月", "闰腊月"
+];
+
 pub const LUNAR_DAY_NAMES: [&str; 30] = [
     "初一", "初二", "初三", "初四", "初五", "初六", "初七", "初八", "初九", "初十",
     "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十",
     "廿一", "廿二", "廿三", "廿四", "廿五", "廿六", "廿七", "廿八", "廿九", "三十"
 ];
 
-/// 计算公历指定日期的精确农历与节气信息
+/// 计算公历指定日期的精确农历与节气信息（采用真实合朔与高精农历对照表，消除平均朔望月积日误差）
 pub fn calculate_lunar_date(year: i32, month: u32, day: u32) -> LunarDateResult {
     let bz = calculate_exact_bazi(year, month, day, 12, 0, 0);
 
-    // 朔望月经验周期折算 (平均朔望月 29.530589 天)
-    // 以 2026-02-17 为农历丙午年正月初一
-    let base_jdn = 2461089.5; // 2026-02-17
-    let cur_jdn = crate::ephem::julian_day_from_date(year, month, day, 12.0);
-    let diff_days = cur_jdn - base_jdn;
+    // 采用高精农历对照表进行公历转农历，精确支持真实大小月与无中气置闰
+    let (l_year, l_month, l_day, is_leap) = crate::lunar_table::solar_to_lunar(year, month, day);
 
-    let synodic_month = 29.530588853;
-    let months_passed = (diff_days / synodic_month).floor() as i32;
-    let day_in_lunar_month = ((diff_days - months_passed as f64 * synodic_month).floor() as usize).clamp(0, 29);
-
-    let mut l_month = ((months_passed).rem_euclid(12) + 1) as u32;
-    let is_leap = false;
-    // 2026 无闰月，常规映射
-    if l_month == 0 { l_month = 12; }
-
-    let m_name = LUNAR_MONTH_NAMES[(l_month as usize - 1) % 12];
-    let d_name = LUNAR_DAY_NAMES[day_in_lunar_month % 30];
+    let m_idx = (l_month.saturating_sub(1) as usize) % 12;
+    let m_name = if is_leap {
+        LUNAR_LEAP_MONTH_NAMES[m_idx]
+    } else {
+        LUNAR_MONTH_NAMES[m_idx]
+    };
+    let d_name = LUNAR_DAY_NAMES[(l_day.saturating_sub(1) as usize) % 30];
 
     // 节气判断：根据太阳黄经是否在 15° 整数倍附近
     let term_idx = ((bz.sun_lon / 15.0).floor() as usize) % 24;
@@ -75,9 +73,9 @@ pub fn calculate_lunar_date(year: i32, month: u32, day: u32) -> LunarDateResult 
         solar_year: year,
         solar_month: month,
         solar_day: day,
-        lunar_year: if month < 2 && l_month > 10 { year - 1 } else { year },
+        lunar_year: l_year,
         lunar_month: l_month,
-        lunar_day: (day_in_lunar_month + 1) as u32,
+        lunar_day: l_day,
         is_leap_month: is_leap,
         lunar_month_name: m_name,
         lunar_day_name: d_name,
@@ -96,6 +94,15 @@ pub fn calculate_calendar_month(year: i32, month: u32) -> CalendarMonthResult {
         _ => 31,
     };
 
+    let mut leap_month = None;
+    if (1900..=2100).contains(&year) {
+        let idx = (year - 1900) as usize;
+        let (_, l_idx, _, _) = crate::lunar_table::LUNAR_TABLE_1900_2100[idx];
+        if l_idx > 0 {
+            leap_month = Some(l_idx as u32);
+        }
+    }
+
     let mut days = Vec::with_capacity(max_d as usize);
     for d in 1..=max_d {
         days.push(calculate_lunar_date(year, month, d));
@@ -105,7 +112,7 @@ pub fn calculate_calendar_month(year: i32, month: u32) -> CalendarMonthResult {
         year,
         month,
         days,
-        leap_month_in_year: None,
-        summary: "高精度农历月历生成完毕：精确太阳黄经交节、合朔初一与干支纪日推算完备。",
+        leap_month_in_year: leap_month,
+        summary: "高精度农历月历生成完毕：基于天文合朔与无中气置闰表推算完备，大小月与节气严密对应。",
     }
 }

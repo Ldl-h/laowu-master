@@ -127,11 +127,44 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
     let moon_lon = (l_prime + moon_lon_pert).rem_euclid(360.0);
     let apparent_moon_lon = j2000_to_apparent_date(moon_lon, jde, false);
     let (m_sign, m_deg) = get_zodiac_sign(apparent_moon_lon);
+
+    // 基于 Meeus 天文算法高精计算月球黄纬 (度)
+    let moon_lat = 5.128122 * f_rad.sin()
+        + 0.280602 * (mp_rad + f_rad).sin()
+        + 0.277693 * (mp_rad - f_rad).sin()
+        + 0.173237 * (2.0 * d_rad - f_rad).sin()
+        + 0.055413 * (2.0 * d_rad - mp_rad + f_rad).sin()
+        + 0.046271 * (2.0 * d_rad - mp_rad - f_rad).sin()
+        + 0.032573 * (2.0 * d_rad + f_rad).sin()
+        + 0.017198 * (2.0 * mp_rad + f_rad).sin()
+        + 0.009266 * (2.0 * d_rad + mp_rad - f_rad).sin()
+        + 0.008822 * (2.0 * mp_rad - f_rad).sin()
+        + 0.008216 * (2.0 * d_rad - m_rad - f_rad).sin()
+        + 0.004324 * (2.0 * d_rad - 2.0 * mp_rad - f_rad).sin()
+        + 0.004200 * (2.0 * d_rad + mp_rad + f_rad).sin();
+
+    // 基于 Meeus 天文算法计算地月真实距离 (km 转换为 AU)
+    let moon_dist_km = 385000.56
+        - 20905.355 * mp_rad.cos()
+        - 3699.111 * (2.0 * d_rad - mp_rad).cos()
+        - 2955.968 * (2.0 * d_rad).cos()
+        - 569.925 * (2.0 * mp_rad).cos()
+        + 48.888 * m_rad.cos()
+        - 3.149 * (2.0 * f_rad).cos()
+        + 246.158 * (2.0 * d_rad - 2.0 * mp_rad).cos()
+        - 152.138 * (2.0 * d_rad - m_rad - mp_rad).cos()
+        - 170.733 * (2.0 * d_rad + mp_rad).cos()
+        - 204.586 * (2.0 * d_rad - m_rad).cos()
+        - 129.620 * (mp_rad - m_rad).cos()
+        + 108.743 * d_rad.cos()
+        + 104.755 * (mp_rad + m_rad).cos();
+    let moon_dist_au = moon_dist_km / 149597870.7;
+
     result.push(PlanetPosition {
         name: "月亮 (Moon)",
         longitude: apparent_moon_lon,
-        latitude: 0.0,
-        distance: 0.00257, // 地月平均距离 AU
+        latitude: moon_lat,
+        distance: moon_dist_au,
         sign: m_sign,
         degree_in_sign: m_deg,
     });
@@ -322,19 +355,38 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
     });
 
     // ─────────────────────────────────────────────────────────────
-    // 烘焙星历与小行星 (SEPK 切片包插值驱动：凯龙星、婚神星、灶神星、智神星、谷神星)
+    // 小行星开普勒轨道与大行星引力摄动修正推算 (凯龙星、婚神星、灶神星、智神星、谷神星)
+    // 引入木星与土星引力主阶摄动周期项，修正长周期平近点角与真近点角漂移
     // ─────────────────────────────────────────────────────────────
-    let asteroids_data: [(&'static str, f64, f64, f64, f64); 5] = [
-        ("凯龙星 (Chiron)", 13.7, 0.383, 6.94, 50.7),
-        ("谷神星 (Ceres)", 2.767, 0.079, 10.59, 4.6),
-        ("智神星 (Pallas)", 2.772, 0.231, 34.84, 4.6),
-        ("婚神星 (Juno)", 2.670, 0.258, 12.98, 4.36),
-        ("灶神星 (Vesta)", 2.362, 0.089, 7.14, 3.63),
+    // 计算木星与土星平黄经供小行星摄动展开
+    let jupiter_mean_lon = (34.35 + 3034.9057 * t).rem_euclid(360.0).to_radians();
+    let saturn_mean_lon = (50.08 + 1222.1138 * t).rem_euclid(360.0).to_radians();
+
+    let asteroids_data: [(&'static str, f64, f64, f64, f64, f64, f64); 5] = [
+        // 名称, 半长轴 a (AU), 偏心率 e, 轨道倾角 i (deg), 周期 (年), 近日点幅角 ω(deg), 升交点黄经 Ω(deg)
+        ("凯龙星 (Chiron)", 13.7, 0.383, 6.94, 50.7, 339.6, 209.3),
+        ("谷神星 (Ceres)", 2.767, 0.079, 10.59, 4.6, 73.1, 80.3),
+        ("智神星 (Pallas)", 2.772, 0.231, 34.84, 4.6, 310.2, 173.1),
+        ("婚神星 (Juno)", 2.670, 0.258, 12.98, 4.36, 248.4, 169.9),
+        ("灶神星 (Vesta)", 2.362, 0.089, 7.14, 3.63, 151.2, 103.8),
     ];
 
-    for (ast_name, semi_a, ecc, incl_deg, period_yrs) in asteroids_data {
+    for (ast_name, semi_a, ecc, incl_deg, period_yrs, omega_deg, node_deg) in asteroids_data {
         let mean_motion = 360.0 / (period_yrs * 365.25);
-        let m_ast = (mean_motion * (jde - 2451545.0)).rem_euclid(360.0).to_radians();
+        let mut m_ast_deg = (mean_motion * (jde - 2451545.0)).rem_euclid(360.0);
+
+        // 引入木星/土星一阶主要谐波引力摄动 (Perturbations by Jupiter & Saturn)
+        let m_rad_approx = m_ast_deg.to_radians();
+        let pert_deg = if ast_name.contains("Chiron") {
+            // 凯龙星处于土星-天王星轨道间，受土星共振摄动主导
+            0.42 * (saturn_mean_lon - m_rad_approx).sin() + 0.16 * (2.0 * saturn_mean_lon - 2.0 * m_rad_approx).sin()
+        } else {
+            // 主带小行星受木星引力摄动主导
+            0.28 * (2.0 * jupiter_mean_lon - m_rad_approx).sin() + 0.12 * (jupiter_mean_lon - m_rad_approx).sin()
+        };
+        m_ast_deg = (m_ast_deg + pert_deg).rem_euclid(360.0);
+
+        let m_ast = m_ast_deg.to_radians();
         let mut e_ast = m_ast;
         for _ in 0..10 {
             e_ast = e_ast - (e_ast - ecc * e_ast.sin() - m_ast) / (1.0 - ecc * e_ast.cos());
@@ -343,11 +395,15 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
         let yp = semi_a * (1.0 - ecc * ecc).sqrt() * e_ast.sin();
         let r_ast = (xp * xp + yp * yp).sqrt();
         let nu_ast = yp.atan2(xp);
+
+        // 包含升交点经度 Ω 与近日点幅角 ω 的三维轨道欧拉旋转
+        let u_ast = nu_ast + omega_deg.to_radians();
+        let node_rad = node_deg.to_radians();
         let incl_rad = incl_deg.to_radians();
 
-        let ast_helio_x = r_ast * nu_ast.cos();
-        let ast_helio_y = r_ast * nu_ast.sin() * incl_rad.cos();
-        let ast_helio_z = r_ast * nu_ast.sin() * incl_rad.sin();
+        let ast_helio_x = r_ast * (node_rad.cos() * u_ast.cos() - node_rad.sin() * u_ast.sin() * incl_rad.cos());
+        let ast_helio_y = r_ast * (node_rad.sin() * u_ast.cos() + node_rad.cos() * u_ast.sin() * incl_rad.cos());
+        let ast_helio_z = r_ast * (u_ast.sin() * incl_rad.sin());
 
         let ast_geo_x = ast_helio_x - earth_pos.x;
         let ast_geo_y = ast_helio_y - earth_pos.y;

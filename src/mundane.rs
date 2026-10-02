@@ -28,27 +28,74 @@ pub struct MundaneResult {
     pub summary: &'static str,
 }
 
-/// 纯数学推算世运占星岁次入宫盘与世俗格局
-pub fn calculate_mundane(year: i32, city_lon: f64, _city_lat: f64) -> MundaneResult {
-    // 1. 计算该年春分时刻 (太阳视黄经 = 0° / 360°)
-    // 简式历元：J2000 春分约为 2451623.81597，年平均回归约 365.2422 日
-    let years_since_2000 = (year - 2000) as f64;
-    let aries_ingress_jde = 2451623.816 + years_since_2000 * 365.2421988;
-    let cancer_ingress_jde = aries_ingress_jde + 92.75;  // 夏至 +92.75天
-    let libra_ingress_jde = aries_ingress_jde + 186.40;  // 秋分 +186.4天
-    let capricorn_ingress_jde = aries_ingress_jde + 276.25; // 冬至 +276.25天
+/// 精密求解指定目标太阳视黄经 (0°春分, 90°夏至, 180°秋分, 270°冬至) 的天文瞬间 (JDE)
+fn find_ingress_jde(year: i32, target_lon: f64, approx_month: u32, approx_day: u32) -> f64 {
+    let mut cur_jd = crate::bazi_exact::to_julian_day(year, approx_month, approx_day, 12, 0, 0);
+    for _ in 0..12 {
+        let cur_l = crate::bazi_exact::sun_ecliptic_longitude(cur_jd);
+        let mut diff = (cur_l - target_lon).rem_euclid(360.0);
+        if diff > 180.0 {
+            diff -= 360.0;
+        }
+        if diff.abs() < 1e-6 {
+            break;
+        }
+        cur_jd -= diff / 0.985647; // 太阳每日运行约 0.985647°
+    }
+    cur_jd
+}
+
+/// 根据黄道经度获取星座古典七政守护星
+fn get_ruler_planet_of_lon(lon: f64) -> &'static str {
+    let sign_idx = ((lon.rem_euclid(360.0)) / 30.0).floor() as usize % 12;
+    match sign_idx {
+        0 => "火星", // 白羊
+        1 => "金星", // 金牛
+        2 => "水星", // 双子
+        3 => "月亮", // 巨蟹
+        4 => "太阳", // 狮子
+        5 => "水星", // 处女
+        6 => "金星", // 天秤
+        7 => "火星", // 天蝎
+        8 => "木星", // 射手
+        9 => "土星", // 摩羯
+        10 => "土星", // 水瓶
+        _ => "木星", // 双鱼
+    }
+}
+
+/// 纯数学推算世运占星岁次入宫盘与世俗格局（基于精密太阳黄经入节与天象年主星）
+pub fn calculate_mundane(year: i32, city_lon: f64, city_lat: f64) -> MundaneResult {
+    let lat = if city_lat.abs() < 1e-4 { 39.9 } else { city_lat };
+
+    // 1. 精密二分/牛顿迭代求解该年四正入宫时刻 (JDE)
+    let aries_ingress_jde = find_ingress_jde(year, 0.0, 3, 20);
+    let cancer_ingress_jde = find_ingress_jde(year, 90.0, 6, 21);
+    let libra_ingress_jde = find_ingress_jde(year, 180.0, 9, 23);
+    let capricorn_ingress_jde = find_ingress_jde(year, 270.0, 12, 22);
 
     // 2. 年主星定局 (Lord of the Year)
-    // 依春分盘上升星座的守护星来定，结合当年岁次干支
-    let aries_lord = match (year.rem_euclid(7)) as usize {
-        0 => "太阳",
-        1 => "月亮",
-        2 => "火星",
-        3 => "水星",
-        4 => "木星",
-        5 => "金星",
-        _ => "土星",
-    };
+    // 依据世运占星法则 (Bonatti / Ptolemy 传统)：计算春分盘在此地之精确上升点 (ASC) 及其守护星
+    let (_, ramc_spring) = crate::western_full::calculate_ramc(aries_ingress_jde, city_lon);
+    let eps_spring = crate::western_full::true_obliquity(aries_ingress_jde);
+    let (asc_spring, _) = crate::western_full::calculate_angles(ramc_spring, lat, eps_spring);
+    let aries_lord = get_ruler_planet_of_lon(asc_spring);
+
+    // 计算各季度入宫盘天象守护星
+    let (_, ramc_summer) = crate::western_full::calculate_ramc(cancer_ingress_jde, city_lon);
+    let eps_summer = crate::western_full::true_obliquity(cancer_ingress_jde);
+    let (asc_summer, _) = crate::western_full::calculate_angles(ramc_summer, lat, eps_summer);
+    let cancer_lord = get_ruler_planet_of_lon(asc_summer);
+
+    let (_, ramc_autumn) = crate::western_full::calculate_ramc(libra_ingress_jde, city_lon);
+    let eps_autumn = crate::western_full::true_obliquity(libra_ingress_jde);
+    let (asc_autumn, _) = crate::western_full::calculate_angles(ramc_autumn, lat, eps_autumn);
+    let libra_lord = get_ruler_planet_of_lon(asc_autumn);
+
+    let (_, ramc_winter) = crate::western_full::calculate_ramc(capricorn_ingress_jde, city_lon);
+    let eps_winter = crate::western_full::true_obliquity(capricorn_ingress_jde);
+    let (asc_winter, _) = crate::western_full::calculate_angles(ramc_winter, lat, eps_winter);
+    let capricorn_lord = get_ruler_planet_of_lon(asc_winter);
 
     let primary_ingress = MundaneIngress {
         season: "春分盘 (Aries Ingress)",
@@ -64,21 +111,21 @@ pub fn calculate_mundane(year: i32, city_lon: f64, _city_lat: f64) -> MundaneRes
             season: "夏至盘 (Cancer Ingress)",
             target_sign: "巨蟹座 0°00′00″",
             ingress_jde: cancer_ingress_jde,
-            lord_of_year: "月亮",
+            lord_of_year: cancer_lord,
             national_focus: "主导农业粮食、民意情绪、水运交通与国土安全",
         },
         MundaneIngress {
             season: "秋分盘 (Libra Ingress)",
             target_sign: "天秤座 0°00′00″",
             ingress_jde: libra_ingress_jde,
-            lord_of_year: "金星",
+            lord_of_year: libra_lord,
             national_focus: "主导对外外交、条约盟约、金融贸易与社会和睦",
         },
         MundaneIngress {
             season: "冬至盘 (Capricorn Ingress)",
             target_sign: "摩羯座 0°00′00″",
             ingress_jde: capricorn_ingress_jde,
-            lord_of_year: "土星",
+            lord_of_year: capricorn_lord,
             national_focus: "主导基础设施、矿产工业、老人长者与国家储备",
         },
     ];

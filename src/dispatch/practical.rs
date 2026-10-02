@@ -64,7 +64,7 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
             if let Some(tiaowen_path) = crate::db::resolve_data_path("tiaowen.bin") {
                 if let Ok(db) = crate::db::XuanshiDatabase::open(tiaowen_path) {
                     if let Ok(Value::Object(map)) = db.load_table("heluo_verses") {
-                        if let Some(v) = map.get(&hl.xian_tian_gua[..]).or_else(|| map.get(&hl.hou_tian_gua[..])) {
+                        if let Some(v) = map.get(hl.xian_tian_gua).or_else(|| map.get(hl.hou_tian_gua)) {
                             val["heluo_canon_verse"] = v.clone();
                         }
                     }
@@ -681,8 +681,9 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
         }
         "jieqi_birth" => {
             let (y, m, d, h, min, sec) = input.get_datetime();
-            let jde = crate::bazi_exact::to_julian_day(y, m, d, h, min, sec);
-            let sun_lon = crate::bazi_exact::sun_ecliptic_longitude(jde);
+            let jde_local = crate::bazi_exact::to_julian_day(y, m, d, h, min, sec);
+            let jde_utc = jde_local - 8.0 / 24.0;
+            let sun_lon = crate::bazi_exact::sun_ecliptic_longitude(jde_utc);
             let jieqi_names = [
                 "春分", "清明", "谷雨", "立夏", "小满", "芒种",
                 "夏至", "小暑", "大暑", "立秋", "处暑", "白露",
@@ -717,10 +718,49 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
             let mut list = Vec::new();
             for (i, name) in jieqi_names.iter().enumerate() {
                 let target_lon = (315.0 + (i as f64 * 15.0)).rem_euclid(360.0);
+                
+                // 二分/牛顿迭代求解该节气精确入节时刻
+                let approx_days = if target_lon >= 285.0 {
+                    (target_lon - 360.0) / 0.985647
+                } else {
+                    target_lon / 0.985647
+                };
+                let vernal_approx_jd = crate::bazi_exact::to_julian_day(y, 3, 20, 12, 0, 0);
+                let mut jq_jd_utc = vernal_approx_jd + approx_days - 8.0 / 24.0;
+                for _ in 0..8 {
+                    let cur_l = crate::bazi_exact::sun_ecliptic_longitude(jq_jd_utc);
+                    let mut diff = (cur_l - target_lon).rem_euclid(360.0);
+                    if diff > 180.0 { diff -= 360.0; }
+                    if diff.abs() < 1e-6 { break; }
+                    jq_jd_utc -= diff / 0.985647;
+                }
+
+                let jq_jd_local = jq_jd_utc + 8.0 / 24.0;
+                let z = (jq_jd_local + 0.5).floor() as i64;
+                let f = (jq_jd_local + 0.5) - z as f64;
+                let l = z + 68569;
+                let n = (4 * l) / 146097;
+                let l = l - (146097 * n + 3) / 4;
+                let yr_idx = (4000 * (l + 1)) / 1461001;
+                let l = l - (1461 * yr_idx) / 4 + 31;
+                let j = (80 * l) / 2447;
+                let cal_day = l - (2447 * j) / 80;
+                let l = j / 11;
+                let cal_mon = j + 2 - (12 * l);
+                let cal_yr = 100 * (n - 49) + yr_idx + l;
+
+                let tot_sec = (f * 86400.0).round() as u32;
+                let cal_h = tot_sec / 3600;
+                let cal_min = (tot_sec % 3600) / 60;
+                let cal_sec = tot_sec % 60;
+                let exact_time = format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", cal_yr, cal_mon, cal_day, cal_h, cal_min, cal_sec);
+
                 list.push(serde_json::json!({
                     "name": name,
                     "target_sun_longitude": target_lon,
-                    "order": i + 1
+                    "order": i + 1,
+                    "exact_time": exact_time,
+                    "jde": jq_jd_utc
                 }));
             }
             let result = serde_json::json!({
@@ -739,14 +779,42 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
             let (y, m, d, h, min, sec) = input.get_datetime();
             let bazi_cur = crate::bazi_exact::calculate_exact_bazi(y, m, d, h, min, sec);
             let (ly_cur, lm_cur, ld_cur, leap_cur) = crate::lunar_table::solar_to_lunar(y, m, d);
+
+            // 精准计算当月实际公历天数
+            let is_leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
+            let max_days = match m {
+                2 => if is_leap { 29 } else { 28 },
+                4 | 6 | 9 | 11 => 30,
+                _ => 31,
+            };
+
+            // 建除十二神与二十八宿基础
+            let jian_chu_names = ["建", "除", "满", "平", "定", "执", "破", "危", "成", "收", "开", "闭"];
+            let week_cn = ["日", "一", "二", "三", "四", "五", "六"];
+
             let mut days = Vec::new();
-            for day_idx in 1..=30 {
+            for day_idx in 1..=max_days {
                 let (_ly, lm, ld, leap) = crate::lunar_table::solar_to_lunar(y, m, day_idx);
                 let bazi = crate::bazi_exact::calculate_exact_bazi(y, m, day_idx, 12, 0, 0);
+
+                // 星期推算 (基姆拉尔森公式)
+                let (w_m, w_y) = if m <= 2 { (m + 12, y - 1) } else { (m, y) };
+                let weekday = (day_idx as i32 + 2 * w_m as i32 + 3 * (w_m as i32 + 1) / 5 + w_y + w_y / 4 - w_y / 100 + w_y / 400 + 1).rem_euclid(7) as usize;
+
+                // 建除十二神：以日支与月支相对位推导
+                let d_zhi_char = bazi.day_pillar.chars().nth(1).unwrap_or('子');
+                let m_zhi_char = bazi.month_pillar.chars().nth(1).unwrap_or('寅');
+                let d_z_idx = crate::bazi::DIZHI.iter().position(|&x| x.starts_with(d_zhi_char)).unwrap_or(0);
+                let m_z_idx = crate::bazi::DIZHI.iter().position(|&x| x.starts_with(m_zhi_char)).unwrap_or(0);
+                let jian_idx = (d_z_idx + 12 - m_z_idx) % 12;
+
                 days.push(serde_json::json!({
                     "solar_day": day_idx,
+                    "date": format!("{:04}-{:02}-{:02}", y, m, day_idx),
+                    "day_of_week": format!("星期{}", week_cn[weekday]),
                     "lunar_day": format!("{}月{}(闰:{})", lm, ld, leap),
-                    "day_ganzhi": bazi.day_pillar
+                    "day_ganzhi": bazi.day_pillar,
+                    "jian_chu_12": jian_chu_names[jian_idx],
                 }));
             }
             let result = serde_json::json!({
@@ -758,7 +826,7 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
                 "solar_datetime": format!("{}-{:02}-{:02} {:02}:{:02}:{:02}", y, m, d, h, min, sec),
                 "lunar": format!("{}年{}月{}日(闰:{})", ly_cur, lm_cur, ld_cur, leap_cur),
                 "four_pillars": [bazi_cur.year_pillar, bazi_cur.month_pillar, bazi_cur.day_pillar, bazi_cur.hour_pillar],
-                "summary": format!("{}年{}月中国公农合历与干支流日全览表", y, m)
+                "summary": format!("{}年{}月中国公农合历与干支流日全览表 (全月共{}天)", y, m, max_days)
             });
             Ok(result)
         }

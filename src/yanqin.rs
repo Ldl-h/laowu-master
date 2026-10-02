@@ -42,6 +42,40 @@ pub const MANSIONS: [Mansion; 28] = [
     Mansion { idx: 28, name: "轸水蚓", head: '轸', yao: '水', animal: "蚓", wuxing: "水" },
 ];
 
+// 二十八宿真实距星天区黄道经度基准表 (J2000历元，消除360/28平均宿度误差)
+// 1角, 2亢, 3氐, 4房, 5心, 6尾, 7箕, 8斗, 9牛, 10女, 11虚, 12危, 13室, 14壁,
+// 15奎, 16娄, 17胃, 18昴, 19毕, 20觜, 21参, 22井, 23鬼, 24柳, 25星, 26张, 27翼, 28轸
+pub const REAL_MANSION_LONS_28: [f64; 28] = [
+    203.84, // 1. 角木蛟 (角宿一 Spica)
+    214.55, // 2. 亢金龙 (亢宿一)
+    225.08, // 3. 氐土貉 (氐宿一)
+    243.18, // 4. 房日兔 (房宿四)
+    249.76, // 5. 心月狐 (心宿二 Antares)
+    264.30, // 6. 尾火虎 (尾宿一)
+    271.74, // 7. 箕水豹 (箕宿一)
+    283.82, // 8. 斗木獬 (斗宿一)
+    303.85, // 9. 牛金牛 (牛宿一)
+    311.95, // 10. 女土蝠 (女宿一)
+    323.41, // 11. 虚日鼠 (虚宿一)
+    333.35, // 12. 危月燕 (危宿一)
+    353.48, // 13. 室火猪 (室宿一)
+    9.11,   // 14. 壁水貐 (壁宿一)
+    20.84,  // 15. 奎木狼 (奎宿一)
+    33.97,  // 16. 娄金狗 (娄宿一)
+    43.43,  // 17. 胃土雉 (胃宿一)
+    59.99,  // 18. 昴日鸡 (昴宿六 Alcyone)
+    69.79,  // 19. 毕月乌 (毕宿五 Aldebaran)
+    83.71,  // 20. 觜火猴 (觜宿一)
+    85.20,  // 21. 参水猿 (参宿三)
+    95.31,  // 22. 井木犴 (井宿一)
+    113.62, // 23. 鬼金羊 (鬼宿一)
+    124.63, // 24. 柳土獐 (柳宿一)
+    147.28, // 25. 星日马 (星宿一 Alphard)
+    159.04, // 26. 张月鹿 (张宿一)
+    173.74, // 27. 翼火蛇 (翼宿一)
+    190.58, // 28. 轸水蚓 (轸宿一)
+];
+
 pub fn get_mansion_by_idx(idx: usize) -> &'static Mansion {
     let i = (idx - 1) % 28;
     &MANSIONS[i]
@@ -223,12 +257,12 @@ pub fn calculate_yanqin(year: i32, month: u32, day: u32, hour_branch: u8, lunar_
     let hy = huo_yao(year, month, day, hour_branch);
     let tt = toutai_du(lunar_month, hour_branch);
 
-    // 二十八宿演禽关联耶鲁星表 (BSC5 亮星天区黄经定位)
+    // 二十八宿演禽关联耶鲁星表 (采用真实距星黄道经度定位天区亮星)
     let star_alignment = if let Some(path) = crate::db::resolve_data_path("bsc5_stars.bin") {
         if let Ok(db) = crate::db::Bsc5StarDatabase::open(path) {
             let m_idx = mansion_idx_of_day(year, month, day);
-            let approx_lon = (m_idx as f64 * (360.0 / 28.0)).rem_euclid(360.0);
-            let hits = db.find_conjunctions(approx_lon, 3.5, 3.0);
+            let true_lon = REAL_MANSION_LONS_28[(m_idx.saturating_sub(1)) % 28];
+            let hits = db.find_conjunctions(true_lon, 5.0, 3.5);
             hits.first().map(|s| format!("当值宿【{}】对应星官亮星 HR-{} (黄经 {:.2}°, 星等 {:.2})", day_m.name, s.hr, s.ecl_lon, s.vmag))
         } else {
             None

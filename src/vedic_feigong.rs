@@ -60,9 +60,12 @@ pub struct VedicChartResult {
 }
 
 pub fn calculate_vedic(jde: f64, asc_tropical: f64) -> VedicChartResult {
-    // 1. Lahiri Ayanamsa 精确近似: J2000历元 (2000-01-01) 约为 23°51'11" = 23.8530556°，每年递增 50.29" (0.013969°/年)
-    let t_years = (jde - 2451545.0) / 365.25;
-    let ayanamsa = (23.8530556 + t_years * 0.013969).rem_euclid(360.0);
+    // 1. Lahiri Ayanamsa (Chitra Paksha) 精密多项式计算 (对齐 IAU 2006 岁差模型与瑞士星历):
+    // J2000.0 历元 Lahiri 岁差基准值 A0 = 23°51'25.53" = 23.8570917°
+    // 加上考虑二阶/三阶非线性加速效应的累积岁差 (IAU 2006 general precession)
+    let t_centuries = (jde - 2451545.0) / 36525.0;
+    let prec_deg = (5028.796195 * t_centuries + 1.1054348 * t_centuries * t_centuries + 0.00007964 * t_centuries * t_centuries * t_centuries) / 3600.0;
+    let ayanamsa = (23.8570917 + prec_deg).rem_euclid(360.0);
 
     // 2. 本命行星回归黄道坐标
     let trop_planets = calculate_planetary_positions(jde);

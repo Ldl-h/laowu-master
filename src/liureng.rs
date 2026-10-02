@@ -115,12 +115,20 @@ pub struct SiKe {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+pub struct TianJiangPosition {
+    pub gong_zhi: &'static str,   // 地盘宫位地支
+    pub tian_pan_zhi: &'static str, // 天盘地支
+    pub tian_jiang: &'static str, // 天将名称 (贵人/螣蛇...)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct LiuRengResult {
     pub yue_jiang: &'static str,
     pub zhan_shi: &'static str,
     pub si_ke: SiKe,
     pub san_chuan: SanChuan,
     pub tian_pan: Vec<(&'static str, &'static str)>, // 地盘支 -> 天盘支
+    pub tian_jiang: Vec<TianJiangPosition>,          // 十二天将落宫
 }
 
 /// 大六壬推算核心 (全九宗门发端法)
@@ -170,6 +178,42 @@ pub fn calculate_liureng(
         ke3: format!("{} 上临 {}", day_zhi, ke3_up),
         ke4: format!("{} 上临 {}", ke3_up, ke4_up),
     };
+
+    // 2.1 十二天将起法 (昼贵/夜贵与顺逆布排)
+    // 占时 卯辰巳午未申(3..=8) 为昼，其余为夜
+    let is_day_zhan = (3..=8).contains(&(zhan_shi_zhi % 12));
+    let guiren_zhi_idx = match day_gan_char {
+        '甲' | '戊' | '庚' => if is_day_zhan { 1 } else { 7 }, // 阳丑(1) / 阴未(7)
+        '乙' | '己' => if is_day_zhan { 0 } else { 8 },        // 阳子(0) / 阴申(8)
+        '丙' | '丁' => if is_day_zhan { 11 } else { 9 },       // 阳亥(11) / 阴酉(9)
+        '辛' => if is_day_zhan { 6 } else { 2 },              // 阳午(6) / 阴寅(2)
+        _ => if is_day_zhan { 3 } else { 5 },                 // 壬癸: 阳卯(3) / 阴巳(5)
+    };
+    // 贵人星所乘天盘支在地盘之落宫
+    let guiren_tian_zhi = ZHI[guiren_zhi_idx];
+    let guiren_di_gong = ZHI.iter().position(|&x| x == get_down(guiren_tian_zhi)).unwrap_or(0);
+    // 贵人落地盘在 亥子丑寅卯辰(11, 0, 1, 2, 3, 4) 顺行，其余逆行
+    let is_shun = [11, 0, 1, 2, 3, 4].contains(&guiren_di_gong);
+
+    let tian_jiang_names = [
+        "贵人", "螣蛇", "朱雀", "六合", "勾陈", "青龙",
+        "天空", "白虎", "太常", "玄武", "太阴", "天后",
+    ];
+
+    let mut tian_jiang_vec = Vec::with_capacity(12);
+    for step in 0..12 {
+        let jiang_name = tian_jiang_names[step];
+        let di_pos = if is_shun {
+            (guiren_di_gong + step) % 12
+        } else {
+            (guiren_di_gong + 12 - step) % 12
+        };
+        tian_jiang_vec.push(TianJiangPosition {
+            gong_zhi: ZHI[di_pos],
+            tian_pan_zhi: get_up(ZHI[di_pos]),
+            tian_jiang: jiang_name,
+        });
+    }
 
     // 四课数据: (上神, 下位)
     // ke1: (ke1_up, gan_ji_zhi)
@@ -222,6 +266,7 @@ pub fn calculate_liureng(
                 ke_ti: "伏吟课",
             },
             tian_pan,
+            tian_jiang: tian_jiang_vec,
         };
     }
 
@@ -247,6 +292,7 @@ pub fn calculate_liureng(
                 si_ke,
                 san_chuan: make_san_chuan(zei_list[0], "反吟无依课"),
                 tian_pan,
+                tian_jiang: tian_jiang_vec,
             };
         } else {
             // 无克以日支驿马发端: 申子辰马在寅, 寅午戌马在申, 巳酉丑马在亥, 亥卯未马在巳
@@ -270,6 +316,7 @@ pub fn calculate_liureng(
                     ke_ti: "反吟无亲课 (驿马发端)",
                 },
                 tian_pan,
+                tian_jiang: tian_jiang_vec,
             };
         }
     }
@@ -294,6 +341,7 @@ pub fn calculate_liureng(
             si_ke,
             san_chuan: make_san_chuan(zei_list[0], "重审课 (下贼上发端)"),
             tian_pan,
+            tian_jiang: tian_jiang_vec,
         };
     } else if zei_list.len() > 1 {
         // 多下贼上：比用法 (与日干阴阳同者发端)
@@ -310,6 +358,7 @@ pub fn calculate_liureng(
                 si_ke,
                 san_chuan: make_san_chuan(same_yy[0], "比用课 (下贼上同阴阳)"),
                 tian_pan,
+                tian_jiang: tian_jiang_vec,
             };
         } else {
             // 涉害法
@@ -320,6 +369,7 @@ pub fn calculate_liureng(
                 si_ke,
                 san_chuan: make_san_chuan(candidate, "涉害课 (多贼比涉)"),
                 tian_pan,
+                tian_jiang: tian_jiang_vec,
             };
         }
     }
@@ -344,6 +394,7 @@ pub fn calculate_liureng(
             si_ke,
             san_chuan: make_san_chuan(ke_list[0], "元首课 (上克下发端)"),
             tian_pan,
+            tian_jiang: tian_jiang_vec,
         };
     } else if ke_list.len() > 1 {
         // 多上克下：比用/知一课
@@ -360,6 +411,7 @@ pub fn calculate_liureng(
                 si_ke,
                 san_chuan: make_san_chuan(same_yy[0], "知一课 (上克下同阴阳)"),
                 tian_pan,
+                tian_jiang: tian_jiang_vec,
             };
         } else {
             let candidate = if !same_yy.is_empty() { same_yy[0] } else { ke_list[0] };
@@ -369,6 +421,7 @@ pub fn calculate_liureng(
                 si_ke,
                 san_chuan: make_san_chuan(candidate, "涉害课 (多克比涉)"),
                 tian_pan,
+                tian_jiang: tian_jiang_vec,
             };
         }
     }
@@ -393,6 +446,7 @@ pub fn calculate_liureng(
                 ke_ti: "八专课",
             },
             tian_pan,
+            tian_jiang: tian_jiang_vec,
         };
     }
 
@@ -411,6 +465,7 @@ pub fn calculate_liureng(
             si_ke,
             san_chuan: make_san_chuan(yao_ke_list[0], "蒿矢课 (神遥克干)"),
             tian_pan,
+            tian_jiang: tian_jiang_vec,
         };
     }
 
@@ -427,6 +482,7 @@ pub fn calculate_liureng(
             si_ke,
             san_chuan: make_san_chuan(gan_yao_list[0], "弹射课 (干遥克神)"),
             tian_pan,
+            tian_jiang: tian_jiang_vec,
         };
     }
 
@@ -450,5 +506,6 @@ pub fn calculate_liureng(
             ke_ti,
         },
         tian_pan,
+        tian_jiang: tian_jiang_vec,
     }
 }

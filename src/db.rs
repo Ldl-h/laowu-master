@@ -501,7 +501,7 @@ impl Bsc5StarDatabase {
 
     fn parse_ra(ra_str: &str) -> f64 {
         // 例: "00h 05m 03.8s"
-        let parts: Vec<&str> = ra_str.split(|c| c == 'h' || c == 'm' || c == 's' || c == ' ').filter(|s| !s.is_empty()).collect();
+        let parts: Vec<&str> = ra_str.split(['h', 'm', 's', ' ']).filter(|s| !s.is_empty()).collect();
         if parts.len() >= 3 {
             let h = parts[0].parse::<f64>().unwrap_or(0.0);
             let m = parts[1].parse::<f64>().unwrap_or(0.0);
