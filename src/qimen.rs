@@ -45,6 +45,7 @@ pub struct QimenPalace {
     pub name: &'static str,
     pub dipan_gan: &'static str,    // 地盘六仪三奇
     pub tianpan_gan: &'static str,  // 天盘六仪三奇
+    pub an_gan: &'static str,       // 暗干
     pub star: &'static str,         // 天盘九星
     pub door: &'static str,         // 人盘八门
     pub god: &'static str,          // 神盘八神
@@ -52,6 +53,7 @@ pub struct QimenPalace {
     pub rumu: bool,                 // 入墓
     pub menpo: bool,                // 门迫
     pub kongwang: bool,             // 空亡
+    pub is_maxing: bool,            // 马星所临之宫
     pub keying: Option<String>,     // 十干克应（天盘加地盘格局与断语）
 }
 
@@ -188,13 +190,25 @@ pub fn calculate_qimen_nianjia(year: i32, hour: u32) -> QimenNianJiaResult {
     }
 }
 
-/// 获取日柱所在的三元符头 (子午卯酉为上元, 寅申巳亥为中元, 辰戌丑未为下元)
-pub fn get_day_yuan(day_zhi_idx: usize) -> usize {
-    match day_zhi_idx % 4 {
-        0 => 0, // 子午卯酉 -> 上元
-        2 => 1, // 寅申巳亥 -> 中元
-        _ => 2, // 辰戌丑未 -> 下元
+/// 获取日柱所属旬的符头（甲子、甲戌、甲申、甲午、甲辰、甲寅）天干和地支索引
+pub fn get_futou(day_ganzhi_idx: usize) -> (usize, usize) {
+    let xun_idx = (day_ganzhi_idx % 60) / 10;
+    let xun_zhi_list = [0, 10, 8, 6, 4, 2]; // 子、戌、申、午、辰、寅
+    (0, xun_zhi_list[xun_idx]) // 天干均为甲 (0)
+}
+
+/// 根据地支判定三元 (子午卯酉为上元, 寅申巳亥为中元, 辰戌丑未为下元)
+pub fn get_sanyuan_by_zhi(zhi_idx: usize) -> usize {
+    match zhi_idx % 12 {
+        0 | 6 | 3 | 9 => 0,  // 子 午 卯 酉 -> 上元
+        2 | 8 | 5 | 11 => 1, // 寅 申 巳 亥 -> 中元
+        _ => 2,              // 辰 戌 丑 未 -> 下元
     }
+}
+
+/// 获取日柱所在的三元符头 (兼容保留接口)
+pub fn get_day_yuan(day_zhi_idx: usize) -> usize {
+    get_sanyuan_by_zhi(day_zhi_idx)
 }
 
 /// 十干克应百格查询（天盘干 + 地盘干）
@@ -334,8 +348,10 @@ pub fn calculate_qimen_with_date(
     let (jq_name, is_yang, ju_nums) = JIEQI_JU_TABLE[jq_idx];
     let dun_type = if is_yang { "阳遁" } else { "阴遁" };
 
-    // 2. 根据日柱地支定三元 (上元0 / 中元1 / 下元2)
-    let yuan_idx = get_day_yuan(day_zhi_idx);
+    // 2. 根据日柱所属符头地支定三元 (上元0 / 中元1 / 下元2)
+    let day_ganzhi_idx = ((6 * _day_gan_idx as i32 - 5 * day_zhi_idx as i32).rem_euclid(60)) as usize;
+    let (_futou_gan, futou_zhi) = get_futou(day_ganzhi_idx);
+    let yuan_idx = get_sanyuan_by_zhi(futou_zhi);
     let yuan_name = match yuan_idx {
         0 => "上元",
         1 => "中元",
@@ -446,6 +462,27 @@ pub fn calculate_qimen_with_date(
         patterns.push("值符星门反吟：九星对冲本宫，变动剧烈，主吉事成凶，凶事反散。".to_string());
     }
 
+    // 马星位置推导 (以时支查：申子辰马在寅艮8，寅午戌马在申坤2，巳酉丑马在亥乾6，亥卯未马在巳巽4)
+    let maxing_gong = match time_zhi_idx % 4 {
+        0 => 8, // 申 子 辰 -> 艮八宫
+        1 => 6, // 巳 酉 丑 -> 乾六宫
+        2 => 2, // 寅 午 戌 -> 坤二宫
+        _ => 4, // 亥 卯 未 -> 巽四宫
+    };
+
+    // 暗干排布：时干入地盘值符宫，按阳顺阴逆推布九宫
+    let mut an_gan_at_gong = [""; 10];
+    let time_gan_sq_idx = SAN_QI_LIU_YI.iter().position(|&g| g == time_gan).unwrap_or(0);
+    for step in 0..9 {
+        let cur_gan = SAN_QI_LIU_YI[(time_gan_sq_idx + step) % 9];
+        let target_g = if is_yang {
+            ((target_zf_gong as i32 - 1 + step as i32).rem_euclid(9) + 1) as usize
+        } else {
+            ((target_zf_gong as i32 - 1 - step as i32).rem_euclid(9) + 1) as usize
+        };
+        an_gan_at_gong[target_g] = cur_gan;
+    }
+
     let mut palaces = Vec::with_capacity(9);
     for i in 1..=9 {
         let tp = tianpan_at_gong[i];
@@ -474,6 +511,7 @@ pub fn calculate_qimen_with_date(
             || (dr == "休门") && i == 9; // 水门迫火宫
 
         let kongwang = (i == kw_gong1 || i == kw_gong2) && i != 5;
+        let is_maxing = i == maxing_gong;
 
         // 生成法奇门荀爽化解之道
         if jixing {
@@ -505,6 +543,7 @@ pub fn calculate_qimen_with_date(
             name: PALACES[i - 1],
             dipan_gan: dipan[i],
             tianpan_gan: tp,
+            an_gan: an_gan_at_gong[i],
             star: star_at_gong[i],
             door: dr,
             god: god_at_gong[i],
@@ -512,6 +551,7 @@ pub fn calculate_qimen_with_date(
             rumu,
             menpo,
             kongwang,
+            is_maxing,
             keying,
         });
     }

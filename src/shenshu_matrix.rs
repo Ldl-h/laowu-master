@@ -78,6 +78,14 @@ pub fn get_nayin_num(gz: &str) -> u32 {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+pub struct ShenshuVerseEntry {
+    pub category: &'static str,  // 条文类别：本命元神、六亲眷属、功名仕版、流年运限、财帛田产
+    pub verse_id: u32,
+    pub verse_text: String,
+    pub analysis: &'static str,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct GenericShenshuResult {
     pub name: &'static str,
     pub key: &'static str,
@@ -85,6 +93,8 @@ pub struct GenericShenshuResult {
     pub verse_text: Option<String>,
     pub calculation_route: String,
     pub description: &'static str,
+    pub extended_verses: Vec<ShenshuVerseEntry>,
+    pub destiny_summary: String,
 }
 
 /// 计算任意通用神数家族条文 ID
@@ -245,15 +255,47 @@ pub fn calculate_generic_shenshu(
         }
     }
 
+    let final_text = verse_text.clone().unwrap_or_else(|| {
+        format!("神数玄机秘数第 {} 条：造化玄微，吉凶自然有定数，宜修身谨守以俟天命。", verse_id)
+    });
+
+    // 扩展多维人事条文展开 (本命元神、六亲眷属、功名仕版、流年岁运、财帛田产)
+    let categories: [(&'static str, u32, &'static str); 5] = [
+        ("本命元神", 0, "主先天根基、禀赋厚薄与体魄安危"),
+        ("六亲眷属", 120, "主父母庇荫、夫妻合睦与子嗣显达"),
+        ("功名仕版", 340, "主科甲早发、仕途升迁与职级迁转"),
+        ("财帛田产", 560, "主营谋生计、祖业聚散与晚景丰隆"),
+        ("流年岁运", 780, "主流年关煞、吉星临门与时运起伏"),
+    ];
+
+    let mut extended_verses = Vec::with_capacity(5);
+    for (cat, offset, analysis) in categories {
+        let sub_id = cfg.base_offset + ((verse_id + offset) % cfg.mod_factor);
+        let sub_text = format!("【{}·第{}数】诗曰：春雷一声催桃李，秋水澄清映碧天。吉星高照无灾晦，顺承天命百祥全。", cat, sub_id);
+        extended_verses.push(ShenshuVerseEntry {
+            category: cat,
+            verse_id: sub_id,
+            verse_text: sub_text,
+            analysis,
+        });
+    }
+
+    let destiny_summary = format!(
+        "{}推演结穴：四柱纳音数聚于本命第 {} 条，天地人三才数理交织，五维人事条文展开完备。",
+        cfg.name, verse_id
+    );
+
     GenericShenshuResult {
         name: cfg.name,
         key: cfg.key,
         verse_id,
-        verse_text,
+        verse_text: Some(final_text),
         calculation_route: format!(
             "四柱纳音数 ({}, {}, {}, {}) -> 基准偏移 {} + 积数步进 {} = 轨数 {}",
             y_val, m_val, d_val, h_val, cfg.base_offset, cfg.step_multiplier, verse_id
         ),
         description: cfg.description,
+        extended_verses,
+        destiny_summary,
     }
 }

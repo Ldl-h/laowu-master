@@ -161,6 +161,18 @@ pub struct PrimaryDirectionResult {
 
 /// 主限法 (Primary Directions) 赤道半弧球面三角投影推算
 /// 核心模型：赤经差（ΔRA）与地平赤纬赤道转换
+/// 黄道坐标转赤道赤经 (Right Ascension, α) 精密球面三角函数
+/// tan(α) = sin(λ) * cos(ε) / cos(λ)
+fn ecliptic_to_ra(ecl_lon_deg: f64) -> f64 {
+    let eps_rad = 23.4392911f64.to_radians(); // J2000历元标准黄赤交角 ε
+    let lam_rad = ecl_lon_deg.to_radians();
+    let sin_lam = lam_rad.sin();
+    let cos_lam = lam_rad.cos();
+    let y = sin_lam * eps_rad.cos();
+    let x = cos_lam;
+    y.atan2(x).to_degrees().rem_euclid(360.0)
+}
+
 pub fn calculate_primary_directions(
     promissors: &[(&'static str, f64)],   // 施照星 (Promissors: 黄经)
     significators: &[(&'static str, f64)], // 承照星 (Significators: 上升/中天/日月)
@@ -179,28 +191,36 @@ pub fn calculate_primary_directions(
     for &(prom, p_lon) in promissors {
         for &(sig, s_lon) in significators {
             for &(asp_name, asp_deg) in &aspects {
-                // 赤道球面投影弧近似推导：黄道度数转赤经弧长
-                // ΔRA = (p_lon ± asp_deg) - s_lon
-                let target_pos = (s_lon + asp_deg).rem_euclid(360.0);
-                let mut arc = (target_pos - p_lon).rem_euclid(360.0);
+                // 基于赤道球面三角的真实赤经差主限弧 (Semi-Arc / Equator Right Ascension):
+                // 1. 将目标相位黄经与施照星黄经分别投影至赤道天球，计算赤道赤经 α
+                let target_ecl = (s_lon + asp_deg).rem_euclid(360.0);
+                let target_ra = ecliptic_to_ra(target_ecl);
+                let prom_ra = ecliptic_to_ra(p_lon);
+
+                // 2. 主限弧即为赤道自转赤经差 Δα (Arc of Direction)
+                let mut arc = (target_ra - prom_ra).rem_euclid(360.0);
                 if arc > 180.0 {
                     arc = 360.0 - arc;
                 }
 
-                // 托勒密经典钥匙：1度弧 = 1岁 (1° = 1.0 year)
-                // 奈波德钥匙 (Naibod Key)：1度 = 1.0146 年
+                // 托勒密经典钥匙：1度赤道弧 = 1岁 (Ptolemy Key: 1.0 year/deg)
+                // 奈波德钥匙 (Naibod Key)：1度赤道弧 = 1.01456 年
+                let is_naibod = method_name.to_lowercase().contains("naibod");
+                let key_ratio = if is_naibod { 1.01456 } else { 1.0 };
+
                 if arc > 0.1 && arc <= 100.0 {
-                    let age = arc * 1.0;
+                    let age = arc * key_ratio;
                     hits.push(PrimaryDirectionHit {
                         promissor: prom,
                         significator: sig,
                         aspect: asp_name,
                         arc_deg: arc,
                         trigger_age: age,
-                        ptolemy_time_key: 1.0,
+                        ptolemy_time_key: key_ratio,
                         description: format!(
-                            "主限【{}】按主限弧行至【{}】{}，弧长 {:.2}°，应期约 {:.1} 岁",
-                            prom, sig, asp_name, arc, age
+                            "主限【{}】经赤道赤经弧行至【{}】{}，球面赤经弧长 {:.2}°，应期约 {:.1} 岁 ({})",
+                            prom, sig, asp_name, arc, age,
+                            if is_naibod { "奈波德钥匙" } else { "托勒密赤经钥匙" }
                         ),
                     });
                 }

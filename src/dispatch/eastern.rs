@@ -15,12 +15,20 @@ pub fn handle_eastern(tool: &str, input: &UniversalInput) -> Option<Result<Value
                 .or_else(|| input.params.as_ref().and_then(|p| p.get("lateZiHourUseNextDay")?.as_bool()))
                 .or_else(|| input.options.as_ref().and_then(|o| o.get("lateZiHourUseNextDay")?.as_bool()))
                 .unwrap_or(true);
-            let bazi = crate::bazi_exact::calculate_exact_bazi_with_switches(y, m, d, h, min, sec, after23, late_zi);
+            let g = input.gender.unwrap_or(1) as u8;
+            let bazi = crate::bazi::calculate_bazi_full(y, m, d, h, min, sec, g, after23, late_zi);
+            let exact = crate::bazi_exact::calculate_exact_bazi_with_switches(y, m, d, h, min, sec, after23, late_zi);
             match serde_json::to_value(&bazi) {
                 Ok(mut val) => {
-                    if let Some(g) = input.gender {
-                        val["gender"] = serde_json::json!(if g == 1 { "乾造 (男)" } else { "坤造 (女)" });
-                    }
+                    val["gender"] = serde_json::json!(if g == 1 { "乾造 (男)" } else { "坤造 (女)" });
+                    val["year_pillar"] = serde_json::json!(exact.year_pillar);
+                    val["month_pillar"] = serde_json::json!(exact.month_pillar);
+                    val["day_pillar"] = serde_json::json!(exact.day_pillar);
+                    val["hour_pillar"] = serde_json::json!(exact.hour_pillar);
+                    val["sun_lon"] = serde_json::json!(exact.sun_lon);
+                    val["four_pillars"] = serde_json::json!([
+                        exact.year_pillar, exact.month_pillar, exact.day_pillar, exact.hour_pillar
+                    ]);
                     Ok(val)
                 }
                 Err(e) => Err(e.to_string()),

@@ -175,7 +175,7 @@ impl UniversalInput {
             "end_date" => self.end_date.is_some(),
             "start_year" => self.start_year.is_some(),
             "end_year" => self.end_year.is_some(),
-            "numbers" => self.numbers.as_ref().map_or(false, |v| !v.is_empty()) || self.nums.as_ref().map_or(false, |v| !v.is_empty()),
+            "numbers" => self.numbers.as_ref().is_some_and(|v| !v.is_empty()) || self.nums.as_ref().is_some_and(|v| !v.is_empty()),
             "spread" => self.spread.is_some(),
             "seed" => self.seed.is_some(),
             "school" => self.school.is_some(),
@@ -190,10 +190,10 @@ impl UniversalInput {
             "format" => self.format.is_some(),
             "year_gan" => self.year_gan.is_some() || self.year_gz.is_some() || self.year_pillar.is_some(),
             "hour_gan" => self.hour_gan.is_some() || self.hour_gz.is_some() || self.hour_pillar.is_some(),
-            "year_gz" => self.year_gz.is_some() || self.year_pillar.is_some() || self.pillars.as_ref().map_or(false, |p| !p.is_empty()),
-            "month_gz" => self.month_gz.is_some() || self.month_pillar.is_some() || self.pillars.as_ref().map_or(false, |p| p.len() >= 2),
-            "day_gz" => self.day_gz.is_some() || self.day_pillar.is_some() || self.pillars.as_ref().map_or(false, |p| p.len() >= 3),
-            "hour_gz" => self.hour_gz.is_some() || self.hour_pillar.is_some() || self.pillars.as_ref().map_or(false, |p| p.len() >= 4),
+            "year_gz" => self.year_gz.is_some() || self.year_pillar.is_some() || self.pillars.as_ref().is_some_and(|p| !p.is_empty()),
+            "month_gz" => self.month_gz.is_some() || self.month_pillar.is_some() || self.pillars.as_ref().is_some_and(|p| p.len() >= 2),
+            "day_gz" => self.day_gz.is_some() || self.day_pillar.is_some() || self.pillars.as_ref().is_some_and(|p| p.len() >= 3),
+            "hour_gz" => self.hour_gz.is_some() || self.hour_pillar.is_some() || self.pillars.as_ref().is_some_and(|p| p.len() >= 4),
             "day_gan" => self.day_gan.is_some() || self.day_gz.is_some(),
             "day_zhi" => self.day_zhi.is_some() || self.day_zhi_str.is_some() || self.day_gz.is_some(),
             "hour_zhi" => self.hour_zhi.is_some() || self.hour_gz.is_some() || self.time.is_some() || self.hour.is_some(),
@@ -205,9 +205,9 @@ impl UniversalInput {
             "lo" => self.lo.is_some(),
             "pai_pan_type" => self.pai_pan_type.is_some(),
             "style" => self.style.is_some(),
-            "is_lunar" => self.is_lunar.is_some(),
-            "lunar_month" => self.lunar_month.is_some(),
-            "lunar_day" => self.lunar_day.is_some(),
+            "is_lunar" => self.is_lunar.is_some() || self.date.is_some() || (self.year.is_some() && self.month.is_some()),
+            "lunar_month" => self.lunar_month.is_some() || self.date.is_some() || self.month.is_some(),
+            "lunar_day" => self.lunar_day.is_some() || self.date.is_some() || self.day.is_some(),
             "after23_new_day" => self.after23_new_day.is_some(),
             "late_zi_use_next_day" => self.late_zi_use_next_day.is_some(),
             _ => true,
@@ -245,7 +245,65 @@ pub fn split_gz(gz: &str, default_gan: char, default_zhi: &'static str) -> (char
 
 /// 对特定技法的专属入参进行前置严格健全性校验，拒绝默认假数据静默填充
 pub fn validate_technique_input(tool: &str, input: &UniversalInput) -> Result<(), String> {
-    // 0. 自动比对 110 项规范中该工具声明的所有专属参数
+    // 0. 基础日期时间合法性校验
+    if let Some(ref date_str) = input.date {
+        let parts: Vec<&str> = date_str.split('-').collect();
+        if parts.len() == 3 {
+            let y_res = parts[0].parse::<i32>();
+            let m_res = parts[1].parse::<u32>();
+            let d_res = parts[2].parse::<u32>();
+            if let (Ok(y), Ok(m), Ok(d)) = (y_res, m_res, d_res) {
+                if !(1..=12).contains(&m) {
+                    return Err(format!("输入日期月份 [{}] 越界，必须在 1 到 12 之间", m));
+                }
+                let is_leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
+                let max_d = match m {
+                    2 => if is_leap { 29 } else { 28 },
+                    4 | 6 | 9 | 11 => 30,
+                    _ => 31,
+                };
+                if d < 1 || d > max_d {
+                    return Err(format!("输入日期天数 [{}] 越界，{} 年 {} 月最大天数为 {} 天", d, y, m, max_d));
+                }
+            } else {
+                return Err(format!("输入日期格式非法: [{}]，必须符合 YYYY-MM-DD 规范", date_str));
+            }
+        }
+    } else if let (Some(y), Some(m), Some(d)) = (input.year, input.month, input.day) {
+        if !(1..=12).contains(&m) {
+            return Err(format!("输入月份 [{}] 越界，必须在 1 到 12 之间", m));
+        }
+        let is_leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
+        let max_d = match m {
+            2 => if is_leap { 29 } else { 28 },
+            4 | 6 | 9 | 11 => 30,
+            _ => 31,
+        };
+        if d < 1 || d > max_d {
+            return Err(format!("输入天数 [{}] 越界，{} 年 {} 月最大天数为 {} 天", d, y, m, max_d));
+        }
+    }
+
+    // 0.1 经纬度合法性校验
+    if let Some(la) = input.lat {
+        if !(-90.0..=90.0).contains(&la) {
+            return Err(format!("纬度坐标 [{}] 越界，必须在 -90.0 到 90.0 之间", la));
+        }
+    }
+    if let Some(lo) = input.lon {
+        if !(-180.0..=180.0).contains(&lo) {
+            return Err(format!("经度坐标 [{}] 越界，必须在 -180.0 到 180.0 之间", lo));
+        }
+    }
+
+    // 0.2 性别参数合法性校验
+    if let Some(g) = input.gender {
+        if g != 1 && g != 2 {
+            return Err(format!("性别代码 [{}] 非法，必须为 1 (乾造/男) 或 2 (坤造/女)", g));
+        }
+    }
+
+    // 0.3 自动比对 110 项规范中该工具声明的所有专属参数
     if let Some(meta) = crate::dispatch::techniques_spec::get_technique_meta(tool) {
         let mut missing = Vec::new();
         for &p in meta.params {
@@ -271,7 +329,7 @@ pub fn validate_technique_input(tool: &str, input: &UniversalInput) -> Result<()
                 && (input.month_gz.is_some() || input.month_pillar.is_some())
                 && (input.day_gz.is_some() || input.day_pillar.is_some())
                 && (input.hour_gz.is_some() || input.hour_pillar.is_some());
-            let has_pillars = input.pillars.as_ref().map_or(false, |p| p.len() >= 4);
+            let has_pillars = input.pillars.as_ref().is_some_and(|p| p.len() >= 4);
             if !has_four && !has_pillars {
                 return Err("技法 [bazi_inverse] 缺少完整的四柱干支参数，必须传入 year_gz, month_gz, day_gz, hour_gz 或 pillars 列表，禁止静默使用默认干支".to_string());
             }

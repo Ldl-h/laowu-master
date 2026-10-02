@@ -62,13 +62,25 @@ pub struct ZiWeiPattern {
     pub description: &'static str,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DaXianStep {
+    pub step: usize,
+    pub gong_name: &'static str,
+    pub gong_zhi: &'static str,
+    pub start_age: u32,
+    pub end_age: u32,
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct ZiWeiResult {
     pub ming_palace_zhi: &'static str,
     pub shen_palace_zhi: &'static str,
+    pub ming_zhu: &'static str,
+    pub shen_zhu: &'static str,
     pub wuxing_ju: String,
     pub ziwei_pos: &'static str,
     pub tianfu_pos: &'static str,
+    pub da_xian: Vec<DaXianStep>,
     pub palaces: Vec<ZiWeiPalace>,
     pub patterns: Vec<ZiWeiPattern>,
 }
@@ -307,12 +319,53 @@ pub fn calculate_ziwei_full(
     // 9. 格局自动识别推理 (Classic Pattern Recognizer)
     let patterns = detect_ziwei_patterns(&palaces, ming_idx);
 
+    // 10. 命主与身主推算
+    // 命主以命宫地支查 (子贪狼/丑巨门/寅禄存/卯文曲/辰廉贞/巳武曲/午破军/未武曲/申廉贞/酉文曲/戌禄存/亥巨门)
+    let ming_zhu_list = [
+        "贪狼", "巨门", "禄存", "文曲", "廉贞", "武曲",
+        "破军", "武曲", "廉贞", "文曲", "禄存", "巨门",
+    ];
+    let ming_zhu = ming_zhu_list[ming_idx % 12];
+
+    // 身主以生年地支查 (子火星/丑天相/寅天梁/卯天同/辰文昌/巳天机/午火星/未天相/申天梁/酉天同/戌文昌/亥天机)
+    let shen_zhu_list = [
+        "火星", "天相", "天梁", "天同", "文昌", "天机",
+        "火星", "天相", "天梁", "天同", "文昌", "天机",
+    ];
+    let shen_zhu = shen_zhu_list[year_zhi_idx % 12];
+
+    // 11. 大限推算 (从命宫起按局数步进，阳男阴女顺行，阴男阳女逆行)
+    let is_yang_year = year_gan_idx.is_multiple_of(2);
+    let is_forward = (is_yang_year && _is_male) || (!is_yang_year && !_is_male);
+    let mut da_xian = Vec::with_capacity(12);
+
+    for step in 1..=12 {
+        let p_idx = if is_forward {
+            (12 - (step - 1)) % 12 // HOUSES 数组是按逆时针逆数排列的，地支顺行对应 HOUSES 索引逆转
+        } else {
+            (step - 1) % 12
+        };
+        let p = &palaces[p_idx];
+        let sa = ju_num + (step as u32 - 1) * 10;
+        let ea = sa + 9;
+        da_xian.push(DaXianStep {
+            step,
+            gong_name: p.house_name,
+            gong_zhi: p.zhi,
+            start_age: sa,
+            end_age: ea,
+        });
+    }
+
     ZiWeiResult {
         ming_palace_zhi: ming_zhi,
         shen_palace_zhi: shen_zhi,
+        ming_zhu,
+        shen_zhu,
         wuxing_ju,
         ziwei_pos: ZHI[zw_idx],
         tianfu_pos: ZHI[tf_idx],
+        da_xian,
         palaces,
         patterns,
     }

@@ -17,6 +17,17 @@ pub struct HouseCusp {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+pub struct Aspect {
+    pub planet1: String,
+    pub planet2: String,
+    pub aspect_type: String,
+    pub angle: f64,
+    pub orb: f64,
+    pub applying: bool,
+    pub exact_angle: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct FullAstroChart {
     pub jde: f64,
     pub lat: f64,
@@ -27,6 +38,9 @@ pub struct FullAstroChart {
     pub house_system: &'static str,
     pub houses: Vec<HouseCusp>,
     pub planets: Vec<PlanetPosition>,
+    pub aspects: Vec<Aspect>,
+    pub lots: Vec<crate::western_extra::ArabicLot>,
+    pub fixed_stars: Vec<crate::western_extra::FixedStarConnection>,
 }
 
 /// 计算格林尼治恒星时 GMST 与地方恒星时 RAMC (度数)
@@ -102,6 +116,53 @@ pub fn calculate_placidus_houses(ramc_deg: f64, geo_lat_deg: f64, eps_deg: f64) 
     [asc, c2, c3, ic, c5, c6, dsc, c8, c9, mc, c11, c12]
 }
 
+/// 计算主要托勒密与次要黄道相位
+pub fn calculate_aspects(planets: &[PlanetPosition]) -> Vec<Aspect> {
+    let aspect_defs = [
+        ("合相 (Conjunction)", 0.0, 10.0),
+        ("六分 (Sextile)", 60.0, 6.0),
+        ("四分/刑 (Square)", 90.0, 8.0),
+        ("三分/拱 (Trine)", 120.0, 8.0),
+        ("对分/冲 (Opposition)", 180.0, 10.0),
+        ("半合 (Semi-Sextile)", 30.0, 2.0),
+        ("梅花 (Inconjunct/Quincunx)", 150.0, 2.5),
+        ("半刑 (Semi-Square)", 45.0, 2.0),
+        ("补八分 (Sesquiquadrate)", 135.0, 2.0),
+    ];
+
+    let mut list = Vec::new();
+    let n = planets.len();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let p1 = &planets[i];
+            let p2 = &planets[j];
+
+            let diff = (p1.longitude - p2.longitude).abs().rem_euclid(360.0);
+            let sep = if diff > 180.0 { 360.0 - diff } else { diff };
+
+            for &(asp_name, target_angle, max_orb) in &aspect_defs {
+                let orb = (sep - target_angle).abs();
+                if orb <= max_orb {
+                    // 运行速度近似：内行星/月亮快于外行星
+                    // p1 索引较小，通常排在前面的月亮/水金快于外行星
+                    let applying = (p1.longitude - p2.longitude).rem_euclid(360.0) < target_angle;
+                    list.push(Aspect {
+                        planet1: p1.name.to_string(),
+                        planet2: p2.name.to_string(),
+                        aspect_type: asp_name.to_string(),
+                        angle: target_angle,
+                        orb: (orb * 100.0).round() / 100.0,
+                        applying,
+                        exact_angle: (sep * 100.0).round() / 100.0,
+                    });
+                    break;
+                }
+            }
+        }
+    }
+    list
+}
+
 /// 计算完整排盘 (支持多种分宫制: placidus, wholesign, equal, regiomontanus)
 pub fn calculate_full_astro_chart(jde: f64, geo_lat: f64, geo_lon: f64, hsys: &str) -> FullAstroChart {
     let (_, ramc) = calculate_ramc(jde, geo_lon);
@@ -138,6 +199,24 @@ pub fn calculate_full_astro_chart(jde: f64, geo_lat: f64, geo_lon: f64, hsys: &s
     }).collect();
 
     let planets = calculate_planetary_positions(jde);
+    let aspects = calculate_aspects(&planets);
+
+    // 计算阿拉伯点 (Lots)
+    let sun_lon = planets.first().map(|p| p.longitude).unwrap_or(0.0);
+    let moon_lon = planets.get(1).map(|p| p.longitude).unwrap_or(0.0);
+    let jup_lon = planets.iter().find(|p| p.name.contains("Jupiter") || p.name.contains("木星")).map(|p| p.longitude).unwrap_or(0.0);
+    let mars_lon = planets.iter().find(|p| p.name.contains("Mars") || p.name.contains("火星")).map(|p| p.longitude).unwrap_or(0.0);
+    let venus_lon = planets.iter().find(|p| p.name.contains("Venus") || p.name.contains("金星")).map(|p| p.longitude).unwrap_or(0.0);
+
+    // 判断昼夜生 (日出到日落，太阳在地平线之上 即 7-12 宫，或简单比较太阳与上升中天关系)
+    let is_day = ((sun_lon - asc).rem_euclid(360.0)) > 180.0;
+    let lots = crate::western_extra::calculate_arabic_lots(asc, sun_lon, moon_lon, jup_lon, mars_lon, venus_lon, is_day);
+
+    // 计算与亮恒星合相 (容许度 1.5°)
+    let mut star_points: Vec<(&str, f64)> = planets.iter().map(|p| (p.name, p.longitude)).collect();
+    star_points.push(("上升点 (ASC)", asc));
+    star_points.push(("中天 (MC)", mc));
+    let fixed_stars = crate::western_extra::calculate_fixed_star_connections(&star_points, 1.5);
 
     FullAstroChart {
         jde,
@@ -149,6 +228,9 @@ pub fn calculate_full_astro_chart(jde: f64, geo_lat: f64, geo_lon: f64, hsys: &s
         house_system: if hsys == "wholesign" { "Whole Sign" } else if hsys == "equal" { "Equal" } else { "Placidus" },
         houses,
         planets,
+        aspects,
+        lots,
+        fixed_stars,
     }
 }
 
