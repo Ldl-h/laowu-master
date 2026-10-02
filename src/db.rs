@@ -615,6 +615,9 @@ pub struct SepkDatabase {
     pub file_name: String,
     pub body_type: u16,
     pub uncomp_len: u32,
+    pub jstart: f64,
+    pub jend: f64,
+    pub de_version: u32,
 }
 
 impl SepkDatabase {
@@ -643,11 +646,42 @@ impl SepkDatabase {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "ephem.bin".to_string());
 
+        // 默认 JPL DE441 核心历元 1800-2400 (JD 2378496.5 ~ 2597632.5)
+        let (jstart, jend, de_version) = if file_name.contains("full") {
+            (625360.5, 2816928.5, 441) // 前3000年至后3000年
+        } else {
+            (2378496.5, 2597632.5, 441) // 1800年至2400年核心切片
+        };
+
         Ok(Self {
             file_name,
             body_type,
             uncomp_len,
+            jstart,
+            jend,
+            de_version,
         })
+    }
+
+    /// 检测本地数据目录是否已部署 SEPK 瑞士星历切片数据集
+    pub fn has_baked_slices() -> bool {
+        let ephem_core = resolve_data_path("ephem_planets_core.bin");
+        let ephem_full = resolve_data_path("ephem_planets_full.bin");
+        ephem_core.is_some() || ephem_full.is_some()
+    }
+
+    /// 解压指定星历切片包的真实二进制载荷 (XZ/LZMA 逆解)
+    pub fn decompress_slice_data<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
+        let file = File::open(&path)?;
+        let mmap = unsafe { Mmap::map(&file)? };
+        if mmap.len() < 16 || &mmap[0..4] != b"SEPK" {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "无效的 SEPK 星历包"));
+        }
+        let mut rdr = io::Cursor::new(&mmap[16..]);
+        let mut decomp = Vec::new();
+        lzma_rs::xz_decompress(&mut rdr, &mut decomp)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+        Ok(decomp)
     }
 
     /// 统计可用的预烘焙切片文件及元信息
