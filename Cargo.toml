@@ -1,8 +1,8 @@
 [package]
-name = "xuanxue-core"
-version = "0.1.0"
+name = "laowu-master"
+version = "0.2.0"
 edition = "2021"
-description = "High-performance, lightweight metaphysics and astronomical engine in pure Rust (Zero Java/Node/SQLite dependencies)"
+description = "老吴大师（哈基仙版）- 极速、脱水、纯 Rust 离线天文占星与东方玄学算力引擎 (Zero Java/Node/SQLite dependencies)"
 
 [dependencies]
 memmap2 = "0.9"

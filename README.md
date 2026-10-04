@@ -1,7 +1,8 @@
-请不要下载使用当前问题有点多
+# 🧙‍♂️ 老吴大师（哈基仙版）
 
-
-# 🌌 xuanxue-core (玄学核心计算引擎)
+<p align="center">
+  <img src="assets/laowu_master.jpg" alt="老吴大师（哈基仙版）" width="480"/>
+</p>
 
 > **极速、脱水、纯 Rust 实现的离线天文占星与东方玄学算力引擎**  
 > 零 Java / Node.js / Python 运行时依赖，零 SQLite 动态链接，单二进制交付。
@@ -32,7 +33,8 @@ xuanxue-core/
 ├── LICENSE                     # GNU AGPL-3.0 许可证
 ├── README.md                   # 项目说明与开发者指南
 ├── TECHNIQUES_110_SPEC.txt     # 110 项占卜技法完整规约与入参清单
-├── data/                       # 🗄️ 极限脱水后的二进制数据资产目录 (总计 ~138 MB)
+├── assets/                     # 🎨 形象与视觉资产目录 (含老吴大师哈基仙版形象)
+├── data/                       # 🗄️ 极限脱水后的二进制数据资产目录 (总计 ~130 MB)
 │   ├── tiaowen.bin             # 18套古籍神数、条文、塔罗牌阵与卡巴拉
 │   ├── ephem_planets_core.bin  # 现代核心600年高精行星切片
 │   ├── ephem_moon_core.bin     # 现代核心600年月球物理切片
@@ -40,7 +42,8 @@ xuanxue-core/
 │   ├── ephem_moon_full.bin     # 全史6000年月球高精物理星历
 │   ├── ephem_asteroids_full.bin# 18颗主要小行星星历
 │   ├── xuanshi.bin             # 二十四史历代天象志二值化数据库
-│   ├── astrodata_cases.bin     # 全球近6万知名名流占星案例库
+│   ├── astrodata_index.bin     # 全球近6万知名名流极速搜索索引
+│   ├── astrodata_details.bin   # 4万名流详细生平、维基传记与Rodden评级 (ADTS)
 │   ├── bsc5_stars.bin          # 耶鲁亮星星表第5版 (8404颗恒星)
 │   └── china_geo.bin           # 全国各省市区县高精经纬度与真太阳时基准
 ├── src/                        # 🦀 纯 Rust 算法源码实现 (54 个源文件)
@@ -69,7 +72,8 @@ xuanxue-core/
 | **`ephem_moon_full.bin`** | **61.23 MB** | 全史 6000 年 (BC 3000 ~ AD 3000) 月球高精摄动与真交点物理星历 (`semo*.se1` 共 50 卷)。 | 极远古/远未来高精占星与日月食推演 |
 | **`ephem_asteroids_full.bin`** | **9.67 MB** | 全史 6000 年凯龙星、谷神星、智神星、婚神星、灶神星等 18 颗主要小行星物理星历 (`seas*.se1` 共 50 卷)。 | 小行星占星、婚恋合盘、深入推运 |
 | **`xuanshi.bin`** | **13.47 MB** | 涵盖二十四史历代天象志、古代交食记录、客星彗星二值化历史天象库。 | 历史天象推演、古籍天象验证 |
-| **`astrodata_cases.bin`** | **27.42 MB** | 全球近 6 万名知名历史人物与名流生辰八字、高精星盘与生平大事件库 (LZMA 高压缩二进制存储)。 | 名人案例库查询、八字占星大数据验证 |
+| **`astrodata_index.bin`** | **2.20 MB** | 全球近 6 万名知名历史人物与名流极速检索索引表 (Magic: `ADTX`)。 | 名人案例库秒级查询、八字占星验证 |
+| **`astrodata_details.bin`** | **19.92 MB** | 4 万名流详细生平、维基百科传记摘要、Rodden AA 评级与多重标签 (Magic: `ADTS`)。 | 案例库传记故事、学术研究详实考证 |
 | **`bsc5_stars.bin`** | **112 KB** | 耶鲁亮星星表第 5 版：全天 8,404 颗恒星的精密赤经、赤纬、视星等与光谱型。 | 恒星占星、三垣二十八宿天象仪 |
 | **`china_geo.bin`** | **87 KB** | 全国所有省、市、区、县级行政区精准经纬度基准表。 | 输入地名自动秒定经纬度与真太阳时差 |
 
@@ -102,9 +106,9 @@ xuanxue-core/
 
 ## 📥 离线数据包下载与安装 (Data Assets Setup)
 
-为了保持代码仓库的极度精简与极速拉取，底层 ~138 MB 的预编译二值化数据库资产并未直接提交至 Git 历史，而是托管在 **[GitHub Releases (v0.1.0)](https://github.com/Ldl-h/xuanxue-core/releases/tag/v0.1.0)** 中：
+为了保持代码仓库的极度精简与极速拉取，底层 ~130 MB 的预编译二值化数据库资产托管在 **[GitHub Releases (v0.2.0)](https://github.com/Ldl-h/xuanxue-core/releases)** 中：
 
-1. 从 Release 页面下载 **[`data.tar.gz`](https://github.com/Ldl-h/xuanxue-core/releases/download/v0.1.0/data.tar.gz)**。
+1. 从 Release 页面下载 **[`data.tar.gz`](https://github.com/Ldl-h/xuanxue-core/releases/download/v0.2.0/data.tar.gz)**。
 2. 解压至项目根目录，确保生成 `data/` 文件夹：
    ```bash
    # Linux / macOS / Git Bash
@@ -113,7 +117,7 @@ xuanxue-core/
    # Windows PowerShell
    tar -xzvf data.tar.gz
    ```
-3. 也可以直接下载预编译好的发布单体程序 **[`xuanxue-core.exe`](https://github.com/Ldl-h/xuanxue-core/releases/download/v0.1.0/xuanxue-core.exe)** 配合 `data/` 即可直接运行。
+3. 也可以直接下载预编译好的发布单体程序 **[`xuanxue-core.exe`](https://github.com/Ldl-h/xuanxue-core/releases/download/v0.2.0/xuanxue-core.exe)** 配合 `data/` 即可直接运行。
 
 ---
 
@@ -154,9 +158,9 @@ xuanxue-core/
 本项目内置专属的高并发端到端自动化测试套件：
 
 ```bash
-# 执行 Rust 原生 22 项单元与深度数据集集成测试
+# 执行 Rust 原生 32 项深度单元与端到端集成测试
 cargo test
 
-# 执行 110 项专属用例异步并发全量验收 (16 并发，平均耗时 ~1.0 秒，100% 通过)
-python tests/test_all_110_custom_inputs.py
+# 执行 110 项专属用例异步并发全量命理断言验收 (16 并发，平均耗时 ~0.8 秒，100% 通过)
+python tests/py_tests/test_all_110_custom_inputs.py
 ```
