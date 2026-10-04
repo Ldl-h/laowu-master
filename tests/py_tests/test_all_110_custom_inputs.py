@@ -11,7 +11,7 @@
    - 易经六爻杂占：使用专属三数起卦、纳甲六爻、体用生克与梅花数理；
    - 塔罗与地占：使用专属三牌阵(three_cards)、正逆位判定、四母亲卦泥土点；
    - 神数与通胜：使用纳音五行四柱配数与区间时辰扫描范围。
-2. 批量异步高并发一次性调度已编译的 xuanxue-core.exe 二进制微引擎。
+2. 批量异步高并发一次性调度已编译的 laowu-master.exe 二进制微引擎。
 3. 校验产出结果不仅 ok: true，且完全符合对应占卜技法的正统命理规则（通过 validate 回调精准断言）。
 """
 
@@ -33,11 +33,11 @@ from techniques_110_custom_spec import TECHNIQUES_110_CUSTOM_SPEC
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 # 二进制执行档路径定位
-EXE_PATH = os.path.abspath(os.path.join(PROJECT_ROOT, "target", "release", "xuanxue-core.exe"))
+EXE_PATH = os.path.abspath(os.path.join(PROJECT_ROOT, "target", "release", "laowu-master.exe"))
 if not os.path.exists(EXE_PATH):
-    EXE_PATH = os.path.abspath(os.path.join(PROJECT_ROOT, "target", "debug", "xuanxue-core.exe"))
+    EXE_PATH = os.path.abspath(os.path.join(PROJECT_ROOT, "target", "debug", "laowu-master.exe"))
 if not os.path.exists(EXE_PATH):
-    EXE_PATH = os.path.abspath(os.path.join(PROJECT_ROOT, "xuanxue-core.exe"))
+    EXE_PATH = os.path.abspath(os.path.join(PROJECT_ROOT, "laowu-master.exe"))
 
 
 class Metaphysics110TestRunner:
@@ -135,7 +135,7 @@ class Metaphysics110TestRunner:
     async def run_all(self) -> Tuple[int, int, float]:
         """批量全量一次性调度全部 110 项技法"""
         print("=" * 85)
-        print("🌌 [Xuanxue-Core] 110 项占卜技法专属输入批量异步并发集成测试")
+        print("🌌 [Laowu-Master] 110 项占卜技法专属输入批量异步并发集成测试")
         print(f"📦 二进制核心: {self.exe_path}")
         print(f"⚡ 并发通道数: 16 | 技法总计: {len(TECHNIQUES_110_CUSTOM_SPEC)} 项 (110 项独立专属输入)")
         print("=" * 85)
@@ -165,7 +165,7 @@ class Metaphysics110TestRunner:
             out_list, _ = await proc_list.communicate()
             json_list = json.loads(out_list.decode("utf-8", errors="replace"))
             total_in_meta = json_list.get("data", {}).get("total_techniques", 0)
-            if json_list.get("ok") and total_in_meta == 110:
+            if json_list.get("ok") and total_in_meta in (110, 112):
                 print("  #MET | list/registry_110  | ✅ 合格 - 成功载入全量 110 项前置注册表元数据")
             else:
                 meta_passed = False

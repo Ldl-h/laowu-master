@@ -1,5 +1,5 @@
 // src/dispatch/techniques_spec.rs
-// 110项玄学占卜技法专属元数据、入参规约与调度前置注册表
+// 110项老吴大师占卜技法专属元数据、入参规约与调度前置注册表
 
 use serde::Serialize;
 use serde_json::Value;

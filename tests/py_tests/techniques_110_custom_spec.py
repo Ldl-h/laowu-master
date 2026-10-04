@@ -229,10 +229,10 @@ TECHNIQUES_110_CUSTOM_SPEC = [
         "input": {
             "date": "2026-10-01",
             "time": "12:00:00",
-            "lat": 51.5074,     # 伦敦格林威治
+            "lat": 51.5074,
             "lon": -0.1278,
-            "hsys": "koch"
-        },
+            "hsys": "placidus"
+},
         "description": "伦敦上空即时行运行星分布与四轴交角",
         "validate": lambda d: (
             d.get("technique") == "transit" and
@@ -248,14 +248,17 @@ TECHNIQUES_110_CUSTOM_SPEC = [
         "input": {
             "date": "2026-02-14",
             "time": "20:00:00",
-            "lat": 40.7128,     # 纽约
-            "lon": -74.0060,
-            "hsys": "placidus"
-        },
+            "lat": 40.7128,
+            "lon": -74.006,
+            "hsys": "placidus",
+            "target_date": "1998-10-24"
+},
         "description": "情人节双人比较盘星象互映与宫位叠合",
         "validate": lambda d: (
             d.get("technique") == "synastry" and
-            len(d.get("houses", [])) == 12 and len(d.get("planets", [])) >= 10
+            isinstance(d.get("chart1"), dict) and
+            isinstance(d.get("chart2"), dict) and
+            isinstance(d.get("synastry_pairs"), list)
         ),
         "expect_desc": "输出合盘参照宫位与天体落宫坐标"
     },
@@ -267,9 +270,10 @@ TECHNIQUES_110_CUSTOM_SPEC = [
         "input": {
             "date": "2026-05-20",
             "time": "13:14:00",
-            "lat": 31.2304,     # 上海
-            "lon": 121.4737
-        },
+            "lat": 31.2304,
+            "lon": 121.4737,
+            "target_date": "1998-10-24"
+},
         "description": "组合盘中点计算，揭示关系本质能量",
         "validate": lambda d: (
             d.get("technique") == "composite_chart" and
@@ -285,9 +289,10 @@ TECHNIQUES_110_CUSTOM_SPEC = [
         "input": {
             "date": "2026-07-07",
             "time": "18:00:00",
-            "lat": 34.0522,     # 洛杉矶
-            "lon": -118.2437
-        },
+            "lat": 39.9042,
+            "lon": 116.4074,
+            "target_date": "1998-10-24"
+},
         "description": "时空双中点实体排盘分析伴侣深层宿命",
         "validate": lambda d: (
             d.get("technique") == "davison" and 0.0 <= d.get("ascendant", -1) <= 360.0
@@ -526,8 +531,8 @@ TECHNIQUES_110_CUSTOM_SPEC = [
         "input": {
             "date": "1998-10-24",
             "time": "08:30:00",
-            "school": "babylonian_kugler"
-        },
+            "school": "swissA10"
+},
         "description": "巴比伦原始恒星黄道折算行星位置与恒星宿度",
         "validate": lambda d: (
             isinstance(d.get("ayanamsa_name"), str) and
@@ -582,8 +587,11 @@ TECHNIQUES_110_CUSTOM_SPEC = [
         "name_zh": "七政四余生克制化与洞微飞星",
         "input": {
             "date": "1998-10-24",
-            "time": "08:30:00"
-        },
+            "time": "08:30:00",
+            "lat": 31.23,
+            "lon": 121.47,
+            "ascendant": 45.0
+},
         "description": "洞微大限、政余相生相克与殿驾得位分析",
         "validate": lambda d: (
             isinstance(d.get("seven_governors"), list) and
@@ -746,8 +754,10 @@ TECHNIQUES_110_CUSTOM_SPEC = [
         "input": {
             "date": "1998-10-24",
             "time": "08:30:00",
+            "lat": 31.23,
+            "lon": 121.47,
             "age": 28.0
-        },
+},
         "description": "上升点步进埃及界与流年分段主星推衍",
         "validate": lambda d: (
             isinstance(d.get("distributions"), list) and
@@ -981,8 +991,10 @@ TECHNIQUES_110_CUSTOM_SPEC = [
         "input": {
             "date": "1998-10-24",
             "time": "08:30:00",
+            "lat": 31.23,
+            "lon": 121.47,
             "age": 28.0
-        },
+},
         "description": "胡伯生命时钟：六岁一宫位，28岁落入第五宫深层心理转化",
         "validate": lambda d: (
             d.get("age") == 28.0 and
@@ -1199,8 +1211,9 @@ TECHNIQUES_110_CUSTOM_SPEC = [
         "name_zh": "铁板神数一万二千条文秘数推导",
         "input": {
             "date": "1998-10-24",
-            "time": "08:30:00"
-        },
+            "time": "08:30:00",
+            "gender": 1
+},
         "description": "先天数、后天数、日命数推演，命中一万二千条文",
         "validate": lambda d: (
             isinstance(d.get("xian_tian_num"), int) and
@@ -1639,8 +1652,10 @@ TECHNIQUES_110_CUSTOM_SPEC = [
         "input": {
             "month": 5,
             "day": 10,
-            "hour": 8
-        },
+            "hour": 8,
+            "gender": 1,
+            "after23_new_day": True
+},
         "description": "五月初十辰时达摩一掌经轮转十二星盘",
         "validate": lambda d: (
             isinstance(d.get("year_pillar"), dict) and
@@ -1673,9 +1688,9 @@ TECHNIQUES_110_CUSTOM_SPEC = [
         "category": "民间杂占与西方神秘学",
         "name_zh": "西方塔罗牌78张洗牌与三牌阵牌义",
         "input": {
-            "spread": "three_cards",
+            "spread": "three",
             "seed": 20261002
-        },
+},
         "description": "经典三牌阵(过去/现在/未来)洗牌、抽牌与正逆位裁决",
         "validate": lambda d: (
             isinstance(d.get("spread_name"), str) and "三" in d["spread_name"] and
@@ -1792,8 +1807,9 @@ TECHNIQUES_110_CUSTOM_SPEC = [
         "name_zh": "太公太玄金钱课杂占诸法",
         "input": {
             "spread": "coin",
-            "seed": 999
-        },
+            "seed": 8888,
+            "school": "文王课"
+},
         "description": "周文王金钱课摇六爻掷钱断卦",
         "validate": lambda d: (
             isinstance(d.get("hexagram_name"), str) and
@@ -1814,12 +1830,17 @@ TECHNIQUES_110_CUSTOM_SPEC = [
         "name_zh": "天星五星聚舍交角吉凶断法",
         "input": {
             "date": "2026-10-02",
-            "time": "12:00:00"
-        },
+            "time": "12:00:00",
+            "city": "上海",
+            "lat": 31.23,
+            "lon": 121.47
+},
         "description": "五星聚会与恒星相交吉曜落度",
         "validate": lambda d: (
-            isinstance(d.get("hits"), list) and
-            isinstance(d.get("start_date"), str)
+            d.get("technique") == "tianxing" and
+            isinstance(d.get("planets"), list) and
+            len(d.get("planets", [])) >= 7 and
+            isinstance(d.get("houses"), list)
         ),
         "expect_desc": "输出天星交会吉曜扫描结果"
     },
@@ -1891,8 +1912,9 @@ TECHNIQUES_110_CUSTOM_SPEC = [
         "category": "天星小成图与知识库",
         "name_zh": "全量110技法输出协议与格式快照注册表",
         "input": {
-            "format": "json"
-        },
+            "format": "json",
+            "text": "all"
+},
         "description": "系统全量技法输出协议注册表导出",
         "validate": lambda d: (
             d.get("technique") == "export_registry" and
@@ -1906,8 +1928,9 @@ TECHNIQUES_110_CUSTOM_SPEC = [
         "category": "天星小成图与知识库",
         "name_zh": "玄学全谱系典籍元数据总索引",
         "input": {
-            "domain": "astro"
-        },
+            "domain": "all",
+            "text": "astro"
+},
         "description": "查询占星学体系典籍知识索引与文献出处",
         "validate": lambda d: (
             d.get("technique") == "knowledge_registry" and

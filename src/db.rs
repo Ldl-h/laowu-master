@@ -390,7 +390,7 @@ pub fn astrodata_details() -> Option<&'static AstroDataDetails> {
 pub fn resolve_data_path(filename: &str) -> Option<std::path::PathBuf> {
     let candidates = [
         format!("data/{}", filename),
-        format!("xuanxue-core/data/{}", filename),
+        format!("laowu-master/data/{}", filename),
         format!("../data/{}", filename),
     ];
     for c in &candidates {

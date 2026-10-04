@@ -1,10 +1,10 @@
-# xuanxue-core 最严格测试套件打包
+# laowu-master 最严格测试套件打包
 
 历轮 5 阶段全量审查（十六轮）使用过的全部测试代码，供本地复测。
 
 ## 一、前置条件
 
-1. **Rust 二进制**：在 xuanxue-core 项目根目录 `cargo build --release`，生成 `target/release/xuanxue-core`
+1. **Rust 二进制**：在 laowu-master 项目根目录 `cargo build --release`，生成 `target/release/laowu-master`
 2. **数据文件**：`data/` 目录必须完整（astrodata_index.bin、astrodata_details.bin、ephem_*.bin、xuanshi.bin、tiaowen.bin、bsc5_stars.bin、china_geo.bin 等，约 154MB）
 3. **Python 3**（异步测试需要 asyncio；默认即带）
 4. **真值对比**：可选——`/home/user/.horosa/runtime/current/horosa-core-js`（JS 引擎，`node bin/cli.mjs run <tool>`）与 horosa-skill Python（service.py `_run_*_tool`）

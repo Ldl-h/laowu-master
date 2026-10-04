@@ -64,7 +64,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let command = args.get(1).map(|s| s.as_str()).unwrap_or("test");
 
-    // 全局支持结构化 JSON 输入: xuanxue-core --tool <tool_name> --input '<json>'
+    // 全局支持结构化 JSON 输入: laowu-master --tool <tool_name> --input '<json>'
     if command == "--tool" || command == "-t" {
         let tool_name = args.get(2).map(|s| s.as_str()).unwrap_or("");
         let input_str = if args.get(3).map(|s| s.as_str()) == Some("--input") {
@@ -101,7 +101,7 @@ fn main() {
         return;
     }
 
-    // 支持直接以子命令名执行查询元数据: xuanxue-core list / xuanxue-core spec <tool>
+    // 支持直接以子命令名执行查询元数据: laowu-master list / laowu-master spec <tool>
     if command == "list" || command == "techniques" {
         let res = dispatcher::dispatch_tool("list", Default::default());
         println!("{}", serde_json::to_string_pretty(&res).unwrap());
@@ -216,7 +216,7 @@ fn main() {
             let h_zhi = args.get(9).map(|s| s.as_str()).unwrap_or("辰");
             let sz = shaozi::calculate_shaozi(y_gan, y_zhi, m_gan, m_zhi, d_gan, d_zhi, h_gan, h_zhi, true);
 
-            let verse_path = "xuanxue-core/data/tiaowen.bin";
+            let verse_path = "laowu-master/data/tiaowen.bin";
             let alt_path = "data/tiaowen.bin";
             let target = if std::path::Path::new(verse_path).exists() { verse_path } else { alt_path };
             let _verse_text = if let Ok(db) = XuanshiDatabase::open(target) {
@@ -564,56 +564,56 @@ fn main() {
         }
         _ => {
             println!("============================================================");
-            println!("  Xuanxue-Core (玄学全算力微引擎 - 纯 Rust 高精度版)");
+            println!("  Laowu-Master (玄学全算力微引擎 - 纯 Rust 高精度版)");
             println!("  零 Java / 零 Node / 零 SQLite / 全自研数学与物理推导");
             println!("============================================================\n");
             println!("全功能指令集 (微工具模式，按需独立加载，内存 1.2MB):");
-            println!("  xuanxue-core bazi [年] [月] [日] [时]       : 四柱八字节气排盘");
-            println!("  xuanxue-core ziwei [月] [日]              : 紫微斗数十二宫主星推算");
-            println!("  xuanxue-core qimen                        : 奇门遁甲九宫飞泊排盘");
-            println!("  xuanxue-core liureng [月将] [占时] [干] [支]: 大六壬九宗门发端三传");
-            println!("  xuanxue-core jinkou [日干] [时支] [月将] [位]: 大六壬金口诀四位生克");
-            println!("  xuanxue-core heluo [四柱干支各两项...]     : 河洛理数天地数与元堂起卦");
-            println!("  xuanxue-core shaozi [四柱干支各两项...]    : 邵子神数起卦与条文查取");
-            println!("  xuanxue-core tieban [月] [日] [时] [支]    : 铁板神数月命五音立命与条文");
-            println!("  xuanxue-core predictive [年龄] [day/night] : 西洋古典法达与小限推运");
-            println!("  xuanxue-core taiyi [年] [月] [日] [时]     : 太乙神数九宫起盘与算数");
-            println!("  xuanxue-core canping [年干支] [月支] [日支] [时支] : 邵子参评金锁银匙");
-            println!("  xuanxue-core yanqin [年] [月] [日] [时支] [农历月] : 演禽神数翻禽倒将起课");
-            println!("  xuanxue-core xiaoliuren [数1] [数2] [数3] [dao] : 小六壬三传起课");
-            println!("  xuanxue-core yizhangjing [年支] [农历月] [农历日] [时支] : 达摩一掌经排盘");
-            println!("  xuanxue-core lingqi [上] [中] [下]        : 灵棋经一百二十五卦推断");
-            println!("  xuanxue-core tarot [牌阵] [随机种子]      : 经典塔罗牌阵与抽牌判读");
-            println!("  xuanxue-core guice [年干] [时干]          : 鬼谷分定数两头钳定命");
-            println!("  xuanxue-core tongshefa [太阴] [太阳] [少阳] [少阴] : 通摄法两极贯通");
-            println!("  xuanxue-core sanshiunited [年] [月] [日] [时] : 三式合一 (奇门+太乙+六壬)");
-            println!("  xuanxue-core shenshu [家族键] [年柱] [月柱] [日柱] [时柱] : 十大神数统摄");
-            println!("  xuanxue-core westerndyn [年龄] [prog/minor/solarreturn] : 西洋推运泛型算子");
-            println!("  xuanxue-core balbillus                    : 巴尔比卢斯 129 年古典推运系统");
-            println!("  xuanxue-core germany                      : 汉堡学派与乌拉尼亚海外虚星");
-            println!("  xuanxue-core babylon                      : 古巴比伦恒星黄道与微黄道");
-            println!("  xuanxue-core hellen                       : 希腊古典整宫制与多玛主宰");
-            println!("  xuanxue-core tongshu                      : 通书择日与董公用事吉凶");
-            println!("  xuanxue-core mundane                      : 世运占星与四季入宫盘");
-            println!("  xuanxue-core tianxing                     : 天星择日与古法卜筮");
-            println!("  xuanxue-core otherbu                      : 诸葛马前课与文王神课");
-            println!("  xuanxue-core india_rectify                : 印度 KP 生时校正");
-            println!("  xuanxue-core bazi_inverse [四柱各一项]    : 八字四柱逆向求解反查");
-            println!("  xuanxue-core suzhan                       : 密教宿曜经二十七宿宿占");
-            println!("  xuanxue-core zhengchuan                   : 正传六爻流派装卦");
-            println!("  xuanxue-core nongli [年] [月]             : 阴阳合历高精度农历月历");
-            println!("  xuanxue-core xiaochengtu [上卦] [下卦]     : 霍斐然小成图九宫排盘");
-            println!("  xuanxue-core huangli [月支索引] [日支索引] : 老黄历建除十二神");
-            println!("  xuanxue-core geomancy                    : 天文地占术十六图盾牌盘");
-            println!("  xuanxue-core zr [星座索引] [年龄]        : 希腊化黄道释放 L1 大限");
-            println!("  xuanxue-core horary [上升星座] [问类]     : 西洋古典卜卦推断");
-            println!("  xuanxue-core guolao [上升度数]           : 果老星宗七政四余排盘");
-            println!("  xuanxue-core vedic [上升度数]            : 印度吠陀占星 D1&D9 恒星盘");
-            println!("  xuanxue-core feigong [月] [日] [时]       : 飞宫小奇门九星起局");
-            println!("  xuanxue-core liuyao [数1] [数2] [数3]      : 易经六爻与梅花心易起卦");
-            println!("  xuanxue-core ephem                        : 西洋天体真视黄经与落座");
-            println!("  xuanxue-core zeri [起] [止] [字段] [值]   : 区间良辰吉时条件扫描器");
-            println!("  xuanxue-core search [表名] [关键词]       : 正史天象与古籍条文检索");
+            println!("  laowu-master bazi [年] [月] [日] [时]       : 四柱八字节气排盘");
+            println!("  laowu-master ziwei [月] [日]              : 紫微斗数十二宫主星推算");
+            println!("  laowu-master qimen                        : 奇门遁甲九宫飞泊排盘");
+            println!("  laowu-master liureng [月将] [占时] [干] [支]: 大六壬九宗门发端三传");
+            println!("  laowu-master jinkou [日干] [时支] [月将] [位]: 大六壬金口诀四位生克");
+            println!("  laowu-master heluo [四柱干支各两项...]     : 河洛理数天地数与元堂起卦");
+            println!("  laowu-master shaozi [四柱干支各两项...]    : 邵子神数起卦与条文查取");
+            println!("  laowu-master tieban [月] [日] [时] [支]    : 铁板神数月命五音立命与条文");
+            println!("  laowu-master predictive [年龄] [day/night] : 西洋古典法达与小限推运");
+            println!("  laowu-master taiyi [年] [月] [日] [时]     : 太乙神数九宫起盘与算数");
+            println!("  laowu-master canping [年干支] [月支] [日支] [时支] : 邵子参评金锁银匙");
+            println!("  laowu-master yanqin [年] [月] [日] [时支] [农历月] : 演禽神数翻禽倒将起课");
+            println!("  laowu-master xiaoliuren [数1] [数2] [数3] [dao] : 小六壬三传起课");
+            println!("  laowu-master yizhangjing [年支] [农历月] [农历日] [时支] : 达摩一掌经排盘");
+            println!("  laowu-master lingqi [上] [中] [下]        : 灵棋经一百二十五卦推断");
+            println!("  laowu-master tarot [牌阵] [随机种子]      : 经典塔罗牌阵与抽牌判读");
+            println!("  laowu-master guice [年干] [时干]          : 鬼谷分定数两头钳定命");
+            println!("  laowu-master tongshefa [太阴] [太阳] [少阳] [少阴] : 通摄法两极贯通");
+            println!("  laowu-master sanshiunited [年] [月] [日] [时] : 三式合一 (奇门+太乙+六壬)");
+            println!("  laowu-master shenshu [家族键] [年柱] [月柱] [日柱] [时柱] : 十大神数统摄");
+            println!("  laowu-master westerndyn [年龄] [prog/minor/solarreturn] : 西洋推运泛型算子");
+            println!("  laowu-master balbillus                    : 巴尔比卢斯 129 年古典推运系统");
+            println!("  laowu-master germany                      : 汉堡学派与乌拉尼亚海外虚星");
+            println!("  laowu-master babylon                      : 古巴比伦恒星黄道与微黄道");
+            println!("  laowu-master hellen                       : 希腊古典整宫制与多玛主宰");
+            println!("  laowu-master tongshu                      : 通书择日与董公用事吉凶");
+            println!("  laowu-master mundane                      : 世运占星与四季入宫盘");
+            println!("  laowu-master tianxing                     : 天星择日与古法卜筮");
+            println!("  laowu-master otherbu                      : 诸葛马前课与文王神课");
+            println!("  laowu-master india_rectify                : 印度 KP 生时校正");
+            println!("  laowu-master bazi_inverse [四柱各一项]    : 八字四柱逆向求解反查");
+            println!("  laowu-master suzhan                       : 密教宿曜经二十七宿宿占");
+            println!("  laowu-master zhengchuan                   : 正传六爻流派装卦");
+            println!("  laowu-master nongli [年] [月]             : 阴阳合历高精度农历月历");
+            println!("  laowu-master xiaochengtu [上卦] [下卦]     : 霍斐然小成图九宫排盘");
+            println!("  laowu-master huangli [月支索引] [日支索引] : 老黄历建除十二神");
+            println!("  laowu-master geomancy                    : 天文地占术十六图盾牌盘");
+            println!("  laowu-master zr [星座索引] [年龄]        : 希腊化黄道释放 L1 大限");
+            println!("  laowu-master horary [上升星座] [问类]     : 西洋古典卜卦推断");
+            println!("  laowu-master guolao [上升度数]           : 果老星宗七政四余排盘");
+            println!("  laowu-master vedic [上升度数]            : 印度吠陀占星 D1&D9 恒星盘");
+            println!("  laowu-master feigong [月] [日] [时]       : 飞宫小奇门九星起局");
+            println!("  laowu-master liuyao [数1] [数2] [数3]      : 易经六爻与梅花心易起卦");
+            println!("  laowu-master ephem                        : 西洋天体真视黄经与落座");
+            println!("  laowu-master zeri [起] [止] [字段] [值]   : 区间良辰吉时条件扫描器");
+            println!("  laowu-master search [表名] [关键词]       : 正史天象与古籍条文检索");
             println!("============================================================");
         }
     }

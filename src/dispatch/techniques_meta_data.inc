@@ -1056,7 +1056,7 @@
     TechniqueMeta {
         id: 106,
         tool: "knowledge_registry",
-        name_zh: "玄学全谱系典籍元数据总索引",
+        name_zh: "老吴大师全谱系典籍元数据总索引",
         category: "天星小成图与知识库",
         description: "查询占星学体系典籍知识索引与文献出处",
         params: &["domain", "text"],

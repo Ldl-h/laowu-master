@@ -4,7 +4,7 @@
   <img src="assets/laowu_master.jpg" alt="老吴大师（哈基仙版）" width="480"/>
 </p>
 
-> **极速、脱水、纯 Rust 实现的离线天文占星与东方玄学算力引擎**  
+> **极速、脱水、纯 Rust 实现的离线天文占星与东方老吴大师算力引擎**  
 > 零 Java / Node.js / Python 运行时依赖，零 SQLite 动态链接，单二进制交付。
 
 ---
@@ -27,7 +27,7 @@
 ## 🏛️ 顶级架构与目录总览
 
 ```text
-xuanxue-core/
+laowu-master/
 ├── Cargo.toml                  # Rust 依赖配置 (serde, memmap2, chrono, vsop87, lzma-rs 等)
 ├── Cargo.lock                  # 依赖版本锁定表
 ├── LICENSE                     # GNU AGPL-3.0 许可证
@@ -54,7 +54,7 @@ xuanxue-core/
 │   ├── dispatch/               # 领域分发子模块 (东方、西洋、民间杂占)
 │   └── ...                     # 110 项技法专项算法实现文件
 ├── tests/                      # 🧪 110项技法大规模异步并发自动化测试套件
-└── xuanxue-core.exe            # 🚀 预编译发布版单体可执行文件 (~1.9 MB)
+└── laowu-master.exe            # 🚀 预编译发布版单体可执行文件 (~1.9 MB)
 ```
 
 ---
@@ -117,7 +117,7 @@ xuanxue-core/
    # Windows PowerShell
    tar -xzvf data.tar.gz
    ```
-3. 也可以直接下载预编译好的发布单体程序 **[`laowu-master.exe`](https://github.com/Ldl-h/laowu-master/releases/download/v0.2.0/laowu-master.exe)**（或保留别名 `xuanxue-core.exe`）配合 `data/` 即可直接运行。
+3. 也可以直接下载预编译好的发布单体程序 **[`laowu-master.exe`](https://github.com/Ldl-h/laowu-master/releases/download/v0.2.0/laowu-master.exe)**（或保留别名 `laowu-master.exe`）配合 `data/` 即可直接运行。
 
 ---
 

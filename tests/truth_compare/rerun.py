@@ -1,12 +1,12 @@
 import json, subprocess, os
-RUST = "/home/user/Doubao/chats/38445268222044418/repos/xuanxue-core"
+RUST = "/home/user/Doubao/chats/38445268222044418/repos/laowu-master"
 OUT = "/home/user/.doubao/agent_mode/workspace/.sessions/38445268222044418/agents/o_000cHCROvLg/work"
 with open("/tmp/eastern_techs.json") as f:
     techs = json.load(f)
 results = []
 for t in techs:
     try:
-        p = subprocess.run(["./target/release/xuanxue-core","--tool",t['tool']],
+        p = subprocess.run(["./target/release/laowu-master","--tool",t['tool']],
             input=t['example'], capture_output=True, text=True, cwd=RUST, timeout=60)
         j = json.loads(p.stdout)
         rec = {'id':t['id'],'tool':t['tool'],'ok':j.get('ok'),'rc':p.returncode}

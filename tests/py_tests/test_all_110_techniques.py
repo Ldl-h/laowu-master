@@ -3,7 +3,7 @@
 110 项占卜技法大规模异步并发自动化集成测试与数据校验套件
 ================================================================
 测试目标：
-1. 批量异步高并发调用已编译的 xuanxue-core 二进制微引擎。
+1. 批量异步高并发调用已编译的 laowu-master 二进制微引擎。
 2. 逐一验证 110 项技法是否成功分发 (ok: true, error: None)。
 3. 校验产出数据结构是否完全合理，符合各命理术数、占星学或神数算法规范。
 4. 深度检测是否真实击穿并调用了底层的二进制数据库：
@@ -33,11 +33,11 @@ from techniques_110_custom_spec import TECHNIQUES_110_CUSTOM_SPEC as TECHNIQUES_
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 # 二进制执行档路径定位
-EXE_PATH = os.path.abspath(os.path.join(PROJECT_ROOT, "target", "release", "xuanxue-core.exe"))
+EXE_PATH = os.path.abspath(os.path.join(PROJECT_ROOT, "target", "release", "laowu-master.exe"))
 if not os.path.exists(EXE_PATH):
-    EXE_PATH = os.path.abspath(os.path.join(PROJECT_ROOT, "target", "debug", "xuanxue-core.exe"))
+    EXE_PATH = os.path.abspath(os.path.join(PROJECT_ROOT, "target", "debug", "laowu-master.exe"))
 if not os.path.exists(EXE_PATH):
-    EXE_PATH = os.path.abspath(os.path.join(PROJECT_ROOT, "xuanxue-core.exe"))
+    EXE_PATH = os.path.abspath(os.path.join(PROJECT_ROOT, "laowu-master.exe"))
 
 
 class TechniqueTestRunner:
@@ -137,7 +137,7 @@ class TechniqueTestRunner:
 
     async def run_all(self) -> Tuple[int, int, float]:
         """批量全量一次性调度全部 110 项技法"""
-        print("🚀 [Xuanxue-Core] 启动全量 110 项技法异步批量调用检测...")
+        print("🚀 [Laowu-Master] 启动全量 110 项技法异步批量调用检测...")
         print(f"📦 二进制核心: {self.exe_path}")
         print(f"⚡ 并发通道数: 16 | 任务总计: {len(TECHNIQUES_110)} 项")
         print("=" * 80)
