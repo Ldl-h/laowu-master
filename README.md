@@ -117,7 +117,7 @@ xuanxue-core/
    # Windows PowerShell
    tar -xzvf data.tar.gz
    ```
-3. 也可以直接下载预编译好的发布单体程序 **[`xuanxue-core.exe`](https://github.com/Ldl-h/laowu-master/releases/download/v0.2.0/xuanxue-core.exe)** 配合 `data/` 即可直接运行。
+3. 也可以直接下载预编译好的发布单体程序 **[`laowu-master.exe`](https://github.com/Ldl-h/laowu-master/releases/download/v0.2.0/laowu-master.exe)**（或保留别名 `xuanxue-core.exe`）配合 `data/` 即可直接运行。
 
 ---
 
@@ -126,29 +126,29 @@ xuanxue-core/
 ### 1. 自省与规范检索
 ```bash
 # 查询引擎中全部 110 项技法清单及其必填参数与描述
-./xuanxue-core.exe list
+./laowu-master.exe list
 
 # 查询单项工具的专属入参规范及示例 payload
-./xuanxue-core.exe spec qimen
-./xuanxue-core.exe spec bazi
+./laowu-master.exe spec qimen
+./laowu-master.exe spec bazi
 ```
 
 ### 2. 标准 JSON 占卜调用
 ```bash
 # 1. 高精八字排盘
-./xuanxue-core.exe --tool bazi --input '{"date": "1998-10-24", "time": "08:30:00", "gender": 1, "after23_new_day": true, "late_zi_use_next_day": true}'
+./laowu-master.exe --tool bazi --input '{"date": "1998-10-24", "time": "08:30:00", "gender": 1, "after23_new_day": true, "late_zi_use_next_day": true}'
 
 # 2. 奇门遁甲转盘局
-./xuanxue-core.exe --tool qimen --input '{"year": 2026, "month": 6, "day": 21, "hour": 11, "minute": 30, "second": 0, "pai_pan_type": 1}'
+./laowu-master.exe --tool qimen --input '{"year": 2026, "month": 6, "day": 21, "hour": 11, "minute": 30, "second": 0, "pai_pan_type": 1}'
 
 # 3. 西洋本命占星盘 (附带萨比恩象征)
-./xuanxue-core.exe --tool chart --input '{"date": "1995-05-18", "time": "15:45:00", "lat": 39.9042, "lon": 116.4074, "hsys": "placidus"}'
+./laowu-master.exe --tool chart --input '{"date": "1995-05-18", "time": "15:45:00", "lat": 39.9042, "lon": 116.4074, "hsys": "placidus"}'
 
 # 4. 塔罗三张牌时间流抽牌
-./xuanxue-core.exe --tool tarot --input '{"spread": "three", "seed": 20261002}'
+./laowu-master.exe --tool tarot --input '{"spread": "three", "seed": 20261002}'
 
 # 5. 城市自动经纬度匹配与真太阳时差解算
-./xuanxue-core.exe --tool nongli_time --input '{"date": "1998-10-24", "time": "08:30:00", "city": "成都"}'
+./laowu-master.exe --tool nongli_time --input '{"date": "1998-10-24", "time": "08:30:00", "city": "成都"}'
 ```
 
 ---
