@@ -180,6 +180,7 @@ pub fn calculate_feigong(month: u32, day: u32, hour: u32) -> FeiGongResult {
     calculate_feigong_full(month, day, hour, None, None, None)
 }
 
+#[allow(dead_code)] // P2-13: 带节气支的飞宫入口，当前无外部调用
 pub fn calculate_feigong_with_qizhi(month: u32, day: u32, hour: u32, qi_zhi: Option<&str>) -> FeiGongResult {
     calculate_feigong_full(month, day, hour, qi_zhi, None, None)
 }

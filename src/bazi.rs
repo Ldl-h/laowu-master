@@ -50,6 +50,7 @@ pub fn get_shishen(day_gan_idx: usize, other_gan_idx: usize) -> &'static str {
     }
 }
 
+#[allow(dead_code)] // P2-13: 字符版十神查询，当前无外部调用（统一使用索引版 get_shishen）
 pub fn get_shishen_by_char(day_gan_char: char, other_gan_char: char) -> &'static str {
     let d_idx = TIANGAN.iter().position(|&x| x.starts_with(day_gan_char)).unwrap_or(0);
     let o_idx = TIANGAN.iter().position(|&x| x.starts_with(other_gan_char)).unwrap_or(0);
@@ -161,6 +162,73 @@ pub struct BaZiResult {
     pub shen_sha: Vec<ShenShaItem>,
 }
 
+/// 时辰地支索引 (0-based, 子=0)：23 点按子时处理（晚子时）
+fn hour_zhi_index(h: u32) -> i64 {
+    (((h + 1) / 2) % 12) as i64
+}
+
+/// 起运岁数（虚岁口径，修复 P2-04：与 lunar-javascript sect=1 一致）
+/// 顺排：生日 → 下一个节令；逆排：上一个节令 → 生日。
+/// 按 日差*4 + 时辰差 折算成月，3 天折 1 岁，虚岁进一。
+/// 1900-2100 内使用预计算节令表（与八字月柱同一权威边界），范围外回退 None。
+fn compute_qiyun_age(
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    is_forward: bool,
+) -> Option<u32> {
+    if !(1900..=2100).contains(&year) {
+        return None;
+    }
+    let birth_ts = crate::bazi_exact::to_timestamp_seconds(year, month, day, hour, minute, second);
+    let row = crate::jieqi_table::JIE_TABLE_1900_2100[(year - 1900) as usize];
+    let mut prev_ts: Option<i64> = None;
+    let mut next_ts: Option<i64> = None;
+    for &jie_ts in row.iter() {
+        if jie_ts <= birth_ts {
+            prev_ts = Some(jie_ts);
+        } else if next_ts.is_none() {
+            next_ts = Some(jie_ts);
+        }
+    }
+    if prev_ts.is_none() && year > 1900 {
+        prev_ts = Some(crate::jieqi_table::JIE_TABLE_1900_2100[(year - 1901) as usize][11]);
+    }
+    if next_ts.is_none() && year < 2100 {
+        next_ts = Some(crate::jieqi_table::JIE_TABLE_1900_2100[(year - 1899) as usize][0]);
+    }
+    let (start_ts, end_ts) = match (prev_ts, next_ts) {
+        (Some(p), Some(n)) => {
+            if is_forward {
+                (birth_ts, n)
+            } else {
+                (p, birth_ts)
+            }
+        }
+        _ => return None,
+    };
+
+    let mut day_diff = (end_ts - start_ts) / 86400;
+    let start_h = ((start_ts.rem_euclid(86400)) / 3600) as u32;
+    let end_h = ((end_ts.rem_euclid(86400)) / 3600) as u32;
+    let mut hour_diff = hour_zhi_index(end_h) - hour_zhi_index(start_h);
+    if hour_diff < 0 {
+        hour_diff += 12;
+        day_diff -= 1;
+    }
+    let month_diff = hour_diff * 10 / 30;
+    let total_months = day_diff * 4 + month_diff;
+    let start_year = total_months / 12;
+    let rem_month = total_months % 12;
+    // 虚岁起运 = 整年起运年数 + 跨年进位 + 1（与 lunar.js DaYun startAge 同式）
+    // 跨年进位：出生月份 + 余月 越过 12 月则进一年
+    let carry = (month as i32 + rem_month as i32 - 1) / 12;
+    Some(start_year as u32 + carry as u32 + 1)
+}
+
 /// 高精四柱干支排盘与全维命理分析
 pub fn calculate_bazi(year: i32, month: u32, day: u32, hour: u32) -> BaZiResult {
     calculate_bazi_full(year, month, day, hour, 0, 0, 1, true, true)
@@ -206,33 +274,36 @@ pub fn calculate_bazi_full(
     let tai_z = (m_z + 3) % 12;
     let tai_yuan = format!("{}{}", TIANGAN[tai_g], DIZHI[tai_z]);
 
-    // 命宫推算：
-    // 月支数 m_num (寅=1..丑=12), 时支数 h_num (子=1..亥=12)
-    // 命宫支 = 14 - (m_num + h_num)，再依年干五虎遁
-    let m_num = ((m_z + 10) % 12 + 1) as i32;
-    let h_num = (h_z + 1) as i32;
-    let mut ming_z_num = 14 - (m_num + h_num);
-    while ming_z_num <= 0 { ming_z_num += 12; }
-    let ming_z = ((ming_z_num - 1 + 2) % 12) as usize; // 1对应寅(2)
-    let ming_step = (ming_z + 10) % 12;
-    let y_gan_base = match y_g % 5 {
-        0 => 2,
-        1 => 4,
-        2 => 6,
-        3 => 8,
-        _ => 0,
-    };
-    let ming_g = (y_gan_base + ming_step) % 10;
+    // 命宫推算 (修复 P0-08：与 lunar-javascript 通行版逐字一致，Horosa-core-js 同源)：
+    //   月序 m1: 寅=1…丑=12 (MONTH_ZHI 序)；时序 h1: 子=1…亥=12 (ZHI 序)
+    //   命宫数 ming_offset = (m1+h1 >= 14 ? 26 : 14) - (m1+h1)，数到地支 (1→寅..12→丑)
+    //   天干 = (年干0基+1)*2 + offset，>10 则 -10（五虎遁 1-based GAN 表）
+    let m1 = ((m_z + 12 - 2) % 12) + 1;          // 寅=1..丑=12
+    let h1_ming = ((h_z + 12 - 2) % 12) + 1;     // 寅=1..丑=12 (MONTH_ZHI 序)
+    let h1_shen = h_z + 1;                       // 子=1..亥=12 (ZHI 序)
+    let raw_m = m1 + h1_ming;
+    let ming_offset = if raw_m >= 14 { 26 - raw_m } else { 14 - raw_m };
+    let ming_z_1 = ming_offset;                  // 1-based: 1→寅, 2→卯 … 12→丑
+    let ming_z = ((ming_z_1 + 1) % 12) as usize; // 0-based 地支索引
+    let mut ming_gan_1 = (y_g as i32 + 1) * 2 + ming_offset as i32 - 1;
+    while ming_gan_1 > 10 {
+        ming_gan_1 -= 10;
+    }
+    let ming_g = (ming_gan_1 % 10) as usize;
     let ming_gong = format!("{}{}", TIANGAN[ming_g], DIZHI[ming_z]);
 
-    // 身宫推算：
-    // 月支数 + 时支数 - 2
-    let mut shen_z_num = m_num + h_num - 2;
-    while shen_z_num > 12 { shen_z_num -= 12; }
-    while shen_z_num <= 0 { shen_z_num += 12; }
-    let shen_z = ((shen_z_num - 1 + 2) % 12) as usize;
-    let shen_step = (shen_z + 10) % 12;
-    let shen_g = (y_gan_base + shen_step) % 10;
+    // 身宫推算 (lunar.js getShenGong)：月序(MONTH_ZHI) + 时序(ZHI) >12 则 -12
+    let mut shen_offset = m1 + h1_shen;
+    if shen_offset > 12 {
+        shen_offset -= 12;
+    }
+    let shen_z_1 = shen_offset;                  // 1-based: 1→寅..12→丑
+    let shen_z = ((shen_z_1 + 1) % 12) as usize;
+    let mut shen_gan_1 = (y_g as i32 + 1) * 2 + shen_offset as i32 - 1;
+    while shen_gan_1 > 10 {
+        shen_gan_1 -= 10;
+    }
+    let shen_g = (shen_gan_1 % 10) as usize;
     let shen_gong = format!("{}{}", TIANGAN[shen_g], DIZHI[shen_z]);
 
     // 大运推算 (8步)：阳男阴女顺排，阴男阳女逆排
@@ -240,8 +311,9 @@ pub fn calculate_bazi_full(
     let is_male = gender != 2;
     let is_forward = (is_yang_year && is_male) || (!is_yang_year && !is_male);
 
-    // 起运岁数近似推算 (3-8岁)
-    let start_age_base = ((d_g + m_z) % 6) + 3;
+    // 起运岁数（修复 P2-04：按节距离折算虚岁，与 JS 一致；范围外回退旧近似）
+    let start_age_base = compute_qiyun_age(year, month, day, hour, minute, second, is_forward)
+        .unwrap_or_else(|| ((d_g + m_z) % 6) as u32 + 3);
     let mut da_yun = Vec::with_capacity(8);
     let m_gz_offset = (6 * (m_g as i32) - 5 * (m_z as i32)).rem_euclid(60) as usize;
 
@@ -255,8 +327,8 @@ pub fn calculate_bazi_full(
         let step_z = step_offset % 12;
         let gz_str = format!("{}{}", TIANGAN[step_g], DIZHI[step_z]);
         let ss = get_shishen(d_g, step_g).to_string();
-        let sa = start_age_base + (step - 1) * 10;
-        let ea = sa + 10;
+        let sa = start_age_base as usize + (step - 1) * 10;
+        let ea = sa + 9;
         da_yun.push(DaYunStep {
             step,
             gan_zhi: gz_str,
@@ -389,7 +461,7 @@ pub fn calculate_bazi_full(
     };
     for (label, z) in [("年支", y_z), ("月支", m_z), ("日支", d_z), ("时支", h_z)] {
         if z == lu_zhi {
-            add_ss(&mut shen_sha, "禄神星", label, "主衣食无忧、一生享福、食禄丰盛与事业基业");
+            add_ss(&mut shen_sha, "禄神", label, "主衣食无忧、一生享福、食禄丰盛与事业基业");
         }
     }
 
@@ -486,6 +558,135 @@ pub fn calculate_bazi_full(
         if z == guasu_zhi {
             add_ss(&mut shen_sha, "寡宿星", label, "女忌寡宿，内心清幽内敛，清心寡欲独立守持");
         }
+    }
+
+    // ── 16~26 增补神煞（修复 P1-06：补齐 JS 侧神煞清单）──────────────────
+    // 16. 太极贵人 (甲→子午, 乙→子午, 丙丁→酉卯, 戊己→辰戌丑未, 庚辛→寅亥, 壬癸→巳申)
+    let taiji_zhis = match d_g {
+        0 | 1 => vec![0, 6],
+        2 | 3 => vec![9, 3],
+        4 | 5 => vec![4, 10, 1, 7],
+        6 | 7 => vec![2, 11],
+        _ => vec![5, 8],
+    };
+    for (label, z) in [("年支", y_z), ("月支", m_z), ("日支", d_z), ("时支", h_z)] {
+        if taiji_zhis.contains(&z) {
+            add_ss(&mut shen_sha, "太极贵人", label, "主聪明好学、喜神秘玄学、具慧根悟性与贵人提携");
+        }
+    }
+
+    // 17. 天德贵人 (月支起：正丁二申三壬四辛五亥六甲七癸八寅九丙十乙子巳丑庚)
+    let tiande_gan = match m_z {
+        2 => 3,  // 寅月 → 丁
+        3 => 8,  // 卯月 → 申
+        4 => 8,  // 辰月 → 壬
+        5 => 7,  // 巳月 → 辛
+        6 => 11, // 午月 → 亥
+        7 => 0,  // 未月 → 甲
+        8 => 9,  // 申月 → 癸
+        9 => 2,  // 酉月 → 寅
+        10 => 2, // 戌月 → 丙
+        11 => 1, // 亥月 → 乙
+        0 => 5,  // 子月 → 巳
+        _ => 6,  // 丑月 → 庚
+    };
+    for (label, g) in [("年干", y_g), ("月干", m_g), ("日干", d_g), ("时干", h_g)] {
+        if g == tiande_gan {
+            add_ss(&mut shen_sha, "天德贵人", label, "主福德深厚、逢凶化吉，行事光明磊落得天助");
+        }
+    }
+
+    // 18. 月德贵人 (寅午戌月→丙, 申子辰月→壬, 亥卯未月→甲, 巳酉丑月→庚)
+    let yuede_gan = match m_z {
+        2 | 6 | 10 => 2, // 寅午戌 → 丙
+        8 | 0 | 4 => 8,  // 申子辰 → 壬
+        11 | 3 | 7 => 0, // 亥卯未 → 甲
+        _ => 6,          // 巳酉丑 → 庚
+    };
+    for (label, g) in [("年干", y_g), ("月干", m_g), ("日干", d_g), ("时干", h_g)] {
+        if g == yuede_gan {
+            add_ss(&mut shen_sha, "月德贵人", label, "主仁慈祥和、贵气临身，化煞解厄诸事顺遂");
+        }
+    }
+
+    // 19. 词馆 (日干对照四支)
+    let ciguang_zhi = match d_g {
+        0 => 2,  // 甲→寅
+        1 => 3,  // 乙→卯
+        2 => 5,  // 丙→巳
+        3 => 6,  // 丁→午
+        4 => 5,  // 戊→巳
+        5 => 6,  // 己→午
+        6 => 8,  // 庚→申
+        7 => 9,  // 辛→酉
+        8 => 10, // 壬→戌
+        _ => 11, // 癸→亥
+    };
+    for (label, z) in [("年支", y_z), ("月支", m_z), ("日支", d_z), ("时支", h_z)] {
+        if z == ciguang_zhi {
+            add_ss(&mut shen_sha, "词馆", label, "主聪颖文秀、才华横溢，利文途功名与词章翰墨");
+        }
+    }
+
+    // 20. 丧门 (岁前二辰) 与 21. 吊客 (岁后二辰)，以年支推
+    let sangmen_zhi = (y_z + 2) % 12;
+    let diaoke_zhi = (y_z + 12 - 2) % 12;
+    for (label, z) in [("月支", m_z), ("日支", d_z), ("时支", h_z)] {
+        if z == sangmen_zhi {
+            add_ss(&mut shen_sha, "丧门星", label, "主孝服哭泣之象，流年逢之多防哀伤损耗");
+        }
+        if z == diaoke_zhi {
+            add_ss(&mut shen_sha, "吊客星", label, "主吊唁探望之应，防亲眷忧烦与阴私是非");
+        }
+    }
+
+    // 22. 月破 (月支对冲)
+    let yuepo_zhi = (m_z + 6) % 12;
+    for (label, z) in [("日支", d_z), ("时支", h_z)] {
+        if z == yuepo_zhi {
+            add_ss(&mut shen_sha, "月破", label, "主破败损耗、虚耗不聚，诸事宜静不宜动");
+        }
+    }
+
+    // 23. 月厌 (正月戌、二月酉…腊月亥，逆排)
+    let yueyan_zhi = (10 + 12 - m_z % 12) % 12;
+    for (label, z) in [("日支", d_z), ("时支", h_z)] {
+        if z == yueyan_zhi {
+            add_ss(&mut shen_sha, "月厌", label, "主晦暗厌魅、行事宜慎，防口舌是非与阴损");
+        }
+    }
+
+    // 24. 十恶大败日 (日柱为十恶大败日，主破祖业家资)
+    let shi_e_bad: [(&str, &str); 10] = [
+        ("甲", "辰"), ("乙", "巳"), ("丙", "申"), ("丁", "亥"), ("戊", "戌"),
+        ("己", "丑"), ("庚", "辰"), ("辛", "巳"), ("壬", "申"), ("癸", "亥"),
+    ];
+    if shi_e_bad.contains(&(TIANGAN[d_g % 10], DIZHI[d_z % 12])) {
+        add_ss(&mut shen_sha, "十恶大败", "日柱", "主祖业难承、财帛易耗，宜白手成家自立自强");
+    }
+
+    // 25. 八专日 (日柱为八专，主专注入迷、情感深挚)
+    let ba_zhuan: [(&str, &str); 8] = [
+        ("甲", "寅"), ("乙", "卯"), ("丁", "未"), ("戊", "申"),
+        ("己", "酉"), ("庚", "申"), ("辛", "酉"), ("癸", "丑"),
+    ];
+    if ba_zhuan.contains(&(TIANGAN[d_g % 10], DIZHI[d_z % 12])) {
+        add_ss(&mut shen_sha, "八专", "日柱", "主专一执着、情深易溺，感情与事业皆宜守正");
+    }
+
+    // 26. 德秀贵人 (按三合月令定德/秀干，对照四干)
+    let (de_gans, xiu_gans): (Vec<usize>, Vec<usize>) = match m_z {
+        2 | 6 | 10 => (vec![2, 3], vec![4, 9]),      // 寅午戌月: 德丙丁, 秀戊癸
+        8 | 0 | 4 => (vec![8, 9, 4, 5], vec![2, 7, 0, 5]), // 申子辰月: 德壬癸戊己, 秀丙辛甲己
+        11 | 3 | 7 => (vec![0, 1], vec![3, 8]),      // 亥卯未月: 德甲乙, 秀丁壬
+        _ => (vec![6, 7], vec![1, 6]),               // 巳酉丑月: 德庚辛, 秀乙庚
+    };
+    let all_gans = [y_g, m_g, d_g, h_g];
+    if all_gans.iter().any(|g| de_gans.contains(g)) {
+        add_ss(&mut shen_sha, "德秀贵人", "四干", "主禀性聪明温厚，才德秀气，利功名文学");
+    }
+    if all_gans.iter().any(|g| xiu_gans.contains(g)) {
+        add_ss(&mut shen_sha, "德秀贵人", "四干", "主秀气聪慧，气质文雅，利文昌与名望");
     }
 
     BaZiResult {

@@ -43,8 +43,11 @@ pub fn calculate_sanshi_united(year: i32, month: u32, day: u32, hour: u32) -> Sa
 
     // 3. 大六壬 (真实太阳视黄经求真月将：过中气换将)
     // 太阳黄经：春分0°(戌将/河魁), 谷雨30°(酉将/从魁), 小满60°(申将/传送)...
-    // 月将与太阳黄经公式：yue_jiang = (11 - (sun_lon / 30.0) as usize) % 12
-    let yue_jiang = (11.0 - (bz.sun_lon.rem_euclid(360.0) / 30.0).floor()).rem_euclid(12.0) as usize;
+    // 月将与太阳黄经公式（ZHI地支索引序，0=子）：yue_jiang_zhi = (10 - floor(sun_lon/30)) % 12
+    // 春分0°→10=戌(河魁) ✓, 谷雨30°→9=酉(从魁) ✓, 夏至90°→7=未(小吉) ✓
+    let yue_jiang_zhi_idx = (10.0 - (bz.sun_lon.rem_euclid(360.0) / 30.0).floor()).rem_euclid(12.0) as usize;
+    // 转换为传统十二月将序(0=登明亥)传入 calculate_liureng
+    let yue_jiang = (11 - yue_jiang_zhi_idx) % 12;
     let zhan_shi = hour_zhi_idx;
     let lr = calculate_liureng(yue_jiang, zhan_shi, d_gan_char, day_zhi_idx);
 
@@ -59,6 +62,7 @@ pub fn calculate_sanshi_united(year: i32, month: u32, day: u32, hour: u32) -> Sa
 
 /// 复合择日扫描器：统一将各家技法（奇门择日、太乙择日、六壬择日、八字择日、三式择日）
 /// 转化为多维条件求交
+#[allow(dead_code)] // P2-13: 预留接口，当前无外部调用
 pub fn scan_composite_zeri(
     start_date: &str,
     end_date: &str,

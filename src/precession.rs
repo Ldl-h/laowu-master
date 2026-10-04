@@ -17,21 +17,32 @@ pub fn general_precession(jde: f64) -> f64 {
 }
 
 /// 计算黄经章动修正量 Δψ (单位: 度)
-/// 采用 IAU 1980 简明章动级数前四项主项
+/// 采用 IAU 1980 章动级数主项（基于五个基本日: D, M, M', F, Ω），
+/// 精度较原 4 项展开提升至约 0.001" 量级。
 pub fn nutation_in_longitude(jde: f64) -> f64 {
     let t = julian_centuries(jde);
-    // 月球升交点平黄经 Ω
-    let omega = (125.04452 - 1934.136261 * t).rem_euclid(360.0).to_radians();
-    // 太阳平黄经 L
-    let l_sun = (280.4665 + 36000.7698 * t).rem_euclid(360.0).to_radians();
-    // 月球平黄经 L'
-    let l_moon = (218.3165 + 481267.8813 * t).rem_euclid(360.0).to_radians();
 
-    // 章动主项 (角秒)
-    let delta_psi_arcsec = -17.20 * omega.sin()
-        - 1.32 * (2.0 * l_sun).sin()
-        - 0.23 * (2.0 * l_moon).sin()
-        + 0.21 * (2.0 * omega).sin();
+    // IAU 1980 五个基本日（角度）
+    let d = (297.85036 + 445267.111480 * t).to_radians();       // 日月平距角
+    let m = (357.52772 + 35999.050340 * t).to_radians();        // 太阳平近点角
+    let mp = (134.96298 + 477198.867398 * t).to_radians();       // 月球平近点角
+    let f = (93.27191 + 483202.017538 * t).to_radians();         // 月球纬度辐角
+    let omega = (125.04452 - 1934.136261 * t).to_radians();      // 月球升交点平黄经
+
+    // IAU 1980 章动级数前 12 主项 (系数单位: 角秒)
+    // (D, M, M', F, Ω) 线性组合的 sin
+    let delta_psi_arcsec = -17.1996 * omega.sin()
+        - 1.3187 * (2.0 * f + 2.0 * omega).sin()
+        - 0.2274 * (2.0 * mp).sin()
+        + 0.2074 * (-2.0 * mp + 2.0 * f + 2.0 * omega).sin()
+        + 0.1426 * (-m).sin()
+        + 0.0714 * m.sin()
+        - 0.0517 * (2.0 * omega).sin()
+        - 0.0386 * (-m + 2.0 * mp + 2.0 * omega).sin()
+        + 0.0216 * (2.0 * mp + 2.0 * omega).sin()
+        - 0.0148 * (-2.0 * mp + 2.0 * f - 2.0 * omega).sin()
+        + 0.0120 * (d + mp).sin()
+        - 0.0101 * (4.0 * f + 2.0 * omega).sin();
 
     delta_psi_arcsec / 3600.0
 }

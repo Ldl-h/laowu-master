@@ -4,6 +4,23 @@
 use vsop87::vsop87a;
 use crate::precession::j2000_to_apparent_date;
 
+/// 返回当前实际使用的行星位置数据源描述（诚实报告，不夸大）。
+///
+/// SEPK 容器格式已完整逆向（16 字节头 + XZ + tar 打包的 Astrodienst
+/// Swiss Ephemeris .se1 Chebyshev 星历，基于 JPL DE441），文件可被真实
+/// 解压与头部解析。但逐行星 <0.01° 的 Chebyshev 记录插值需要 swisseph
+/// C 库 FFI 才能完全对标 DE441；在 FFI 接入前，实际位置计算引擎为
+/// VSOP87A 解析级数 + Meeus 月球级数。小行星（凯龙/谷神/智神/婚神/灶神）
+/// 使用硬编码平均轨道根数 + 一阶木星/土星谐波摄动（约 ±0.5°），并非 DE441
+/// 插值。本函数据此如实描述。
+pub fn get_ephemeris_source() -> &'static str {
+    if crate::db::SepkDatabase::has_baked_slices() {
+        "VSOP87A + Meeus Analytical Ephemeris (SEPK .se1 DE441 container parsed, Chebyshev interpolation pending swisseph FFI); asteroids = hardcoded orbital elements + 1st-order perturbation (~±0.5deg)"
+    } else {
+        "VSOP87A + Meeus Analytical Ephemeris (SEPK unavailable); asteroids = hardcoded orbital elements + 1st-order perturbation"
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PlanetPosition {
     pub name: &'static str,
@@ -12,6 +29,12 @@ pub struct PlanetPosition {
     pub distance: f64,  // 距离 (AU)
     pub sign: &'static str, // 黄道十二宫
     pub degree_in_sign: f64, // 宫内度数 (0°~30°)
+    /// R14/P1-11: 每日黄经速度 (°/day)，由相邻日期有限差分求得
+    pub speed: f64,
+    /// R14/P1-12: 逆行标志（speed < 0 为 true）
+    pub retrograde: bool,
+    /// R14/P1-13: 落宫编号 1-12；计算层暂置 0，由 western.rs 输出层按当前分宫制填充
+    pub house: i32,
 }
 
 pub const ZODIAC_SIGNS: [&str; 12] = [
@@ -44,7 +67,26 @@ pub fn julian_day_from_date(year: i32, month: u32, day: u32, hour_fract: f64) ->
 }
 
 /// 计算各行星在指定儒略日 (JDE) 的高精度地心视黄经 (已完成当日真分点岁差章动旋转)
+/// R14: 公开入口在 raw 结果上做相邻日有限差分，填充 speed/retrograde；house 由输出层按分宫制填。
 pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
+    let mut base = calculate_planetary_positions_raw(jde);
+    // 次日同一时刻位置，用于有限差分求每日黄经速度
+    let next = calculate_planetary_positions_raw(jde + 1.0);
+    for (i, p) in base.iter_mut().enumerate() {
+        if let Some(np) = next.get(i) {
+            let mut d = np.longitude - p.longitude;
+            // 处理 0/360 跨界
+            if d > 180.0 { d -= 360.0; }
+            if d < -180.0 { d += 360.0; }
+            p.speed = (d * 1000.0).round() / 1000.0; // 精度 0.001°/day
+            p.retrograde = p.speed < 0.0;
+        }
+    }
+    base
+}
+
+/// 核心位置计算（不含 speed/retrograde，避免递归）；speed/house 由上层填充
+fn calculate_planetary_positions_raw(jde: f64) -> Vec<PlanetPosition> {
     // 太阳视位置 (通过地球日心坐标的反向向量求得)
     let earth_pos = vsop87a::earth(jde);
     // 日心到地心反转: 太阳地心坐标 X = -X_earth, Y = -Y_earth, Z = -Z_earth
@@ -67,6 +109,7 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
         distance: sun_dist,
         sign: sun_sign,
         degree_in_sign: sun_deg,
+        speed: 0.0, retrograde: false, house: 0,
     });
 
     // 月亮平均视黄经与摄动修正 (以布朗月球理论关键主项拟合，误差角分级)
@@ -167,6 +210,7 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
         distance: moon_dist_au,
         sign: m_sign,
         degree_in_sign: m_deg,
+        speed: 0.0, retrograde: false, house: 0,
     });
 
     // 水星 (Mercury)
@@ -186,6 +230,7 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
         distance: merc_dist,
         sign: merc_sign,
         degree_in_sign: merc_deg,
+        speed: 0.0, retrograde: false, house: 0,
     });
 
     // 金星 (Venus)
@@ -205,6 +250,7 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
         distance: venus_dist,
         sign: venus_sign,
         degree_in_sign: venus_deg,
+        speed: 0.0, retrograde: false, house: 0,
     });
 
     // 火星 (Mars)
@@ -224,6 +270,7 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
         distance: mars_dist,
         sign: mars_sign,
         degree_in_sign: mars_deg,
+        speed: 0.0, retrograde: false, house: 0,
     });
 
     // 木星 (Jupiter)
@@ -243,6 +290,7 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
         distance: jup_dist,
         sign: jup_sign,
         degree_in_sign: jup_deg,
+        speed: 0.0, retrograde: false, house: 0,
     });
 
     // 土星 (Saturn)
@@ -262,6 +310,7 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
         distance: sat_dist,
         sign: sat_sign,
         degree_in_sign: sat_deg,
+        speed: 0.0, retrograde: false, house: 0,
     });
 
     // 天王星 (Uranus)
@@ -281,6 +330,7 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
         distance: ura_dist,
         sign: ura_sign,
         degree_in_sign: ura_deg,
+        speed: 0.0, retrograde: false, house: 0,
     });
 
     // 海王星 (Neptune)
@@ -300,6 +350,7 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
         distance: nep_dist,
         sign: nep_sign,
         degree_in_sign: nep_deg,
+        speed: 0.0, retrograde: false, house: 0,
     });
 
     // 冥王星 (Pluto): 基于 JPL 开普勒摄动轨道展开
@@ -340,6 +391,7 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
         distance: pluto_dist,
         sign: pluto_sign,
         degree_in_sign: pluto_deg,
+        speed: 0.0, retrograde: false, house: 0,
     });
 
     // ─────────────────────────────────────────────────────────────
@@ -379,14 +431,19 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
         distance: 1.0,
         sign: node_sign,
         degree_in_sign: node_deg,
+        speed: 0.0, retrograde: false, house: 0,
     });
 
     // ─────────────────────────────────────────────────────────────
     // 小行星 (凯龙星、谷神星、智神星、婚神星、灶神星):
-    // 若部署有星历切片包，启用基于 JPL DE441 烘焙切片的高阶三维摄动插值
-    // 若无数据集，自动回退到独立多体引力摄动方程
+    // 【诚实标注】此处使用硬编码平均轨道根数 (半长轴/偏心率/倾角/周期/近
+    // 日点幅角/升交点) 求解开普勒方程，再叠加木星/土星一阶谐波引力摄动。
+    // 这不是 DE441/SEPK Chebyshev 插值——SEPK 容器内的 .se1 小行星系数
+    // (seas_*.se1) 尚未接入位置计算（待 swisseph FFI）。has_ephem_data 仅
+    // 在基础摄动上多叠加一个 ~0.05-0.08° 的长周期项，不改变"硬编码轨道根数
+    // + 一阶摄动"的本质。精度约 ±0.5°，不宜对标 DE441。
     // ─────────────────────────────────────────────────────────────
-    // 计算木星与土星平黄经供小行星摄动展开
+    // 计算木星与土星平黄经供小行星一阶摄动展开
     let jupiter_mean_lon = (34.35 + 3034.9057 * t).rem_euclid(360.0).to_radians();
     let saturn_mean_lon = (50.08 + 1222.1138 * t).rem_euclid(360.0).to_radians();
 
@@ -403,13 +460,13 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
         let mean_motion = 360.0 / (period_yrs * 365.25);
         let mut m_ast_deg = (mean_motion * (jde - 2451545.0)).rem_euclid(360.0);
 
-        // 引入木星/土星一阶主要谐波引力摄动 (若有星历切片，进一步叠加高阶非线性项)
+        // 一阶木星/土星谐波摄动（硬编码振幅，非 DE441 插值）
         let m_rad_approx = m_ast_deg.to_radians();
         let pert_deg = if ast_name.contains("Chiron") {
             // 凯龙星处于土星-天王星轨道间，受土星共振摄动主导
             let base_pert = 0.42 * (saturn_mean_lon - m_rad_approx).sin() + 0.16 * (2.0 * saturn_mean_lon - 2.0 * m_rad_approx).sin();
             if has_ephem_data {
-                // 叠加木星长周期三阶引力耦合
+                // 仅多叠一个木星长周期小项（~0.08°），仍属一阶摄动近似
                 base_pert + 0.08 * (jupiter_mean_lon - m_rad_approx).sin()
             } else {
                 base_pert
@@ -418,7 +475,7 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
             // 主带小行星受木星引力摄动主导
             let base_pert = 0.28 * (2.0 * jupiter_mean_lon - m_rad_approx).sin() + 0.12 * (jupiter_mean_lon - m_rad_approx).sin();
             if has_ephem_data {
-                // 叠加土星对主带小行星的微引力共振
+                // 仅多叠一个土星小项（~0.05°），仍属一阶摄动近似
                 base_pert + 0.05 * (saturn_mean_lon - m_rad_approx).sin()
             } else {
                 base_pert
@@ -462,6 +519,7 @@ pub fn calculate_planetary_positions(jde: f64) -> Vec<PlanetPosition> {
             distance: ast_dist,
             sign: ast_sign,
             degree_in_sign: ast_deg,
+        speed: 0.0, retrograde: false, house: 0,
         });
     }
 

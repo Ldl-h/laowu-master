@@ -26,6 +26,9 @@ pub struct MundaneResult {
     pub seasonal_ingresses: Vec<MundaneIngress>,
     pub houses: Vec<MundaneHouseMeaning>,
     pub summary: &'static str,
+    /// R5: 赤道(lat≈0)为合法天文位置，不再静默替换为北京，仅在此时附 warning
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location_warning: Option<&'static str>,
 }
 
 /// 精密求解指定目标太阳视黄经 (0°春分, 90°夏至, 180°秋分, 270°冬至) 的天文瞬间 (JDE)
@@ -66,7 +69,14 @@ fn get_ruler_planet_of_lon(lon: f64) -> &'static str {
 
 /// 纯数学推算世运占星岁次入宫盘与世俗格局（基于精密太阳黄经入节与天象年主星）
 pub fn calculate_mundane(year: i32, city_lon: f64, city_lat: f64) -> MundaneResult {
-    let lat = if city_lat.abs() < 1e-4 { 39.9 } else { city_lat };
+    // R5: lat=0（赤道）是合法天文位置，不再静默替换为北京 39.9，按真实纬度计算；
+    // 仅在赤道输入时附 location_warning 提示，便于用户知晓这不是默认回退。
+    let lat = city_lat;
+    let location_warning = if city_lat.abs() < 1e-4 {
+        Some("纬度 0 为赤道合法值，未做替换，已按真实 lat=0 计算各季入宫盘上升点")
+    } else {
+        None
+    };
 
     // 1. 精密二分/牛顿迭代求解该年四正入宫时刻 (JDE)
     let aries_ingress_jde = find_ingress_jde(year, 0.0, 3, 20);
@@ -158,5 +168,6 @@ pub fn calculate_mundane(year: i32, city_lon: f64, city_lat: f64) -> MundaneResu
         seasonal_ingresses,
         houses,
         summary,
+        location_warning,
     }
 }

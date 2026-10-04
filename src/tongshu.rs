@@ -8,6 +8,30 @@ pub struct TongshuEvent {
     pub reason: String,
 }
 
+/// 金神七煞（P2-7）：值日宿命中七星 → 大凶，三吉星亦不能解。对齐 JS donggong.js。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct JinShenQiSha {
+    pub active: bool,
+    pub xiu: String,
+    pub note: String,
+}
+
+/// 三煞方（P2-7）：节气月建支三合局帝旺对冲三山。对齐 JS donggong.js。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SanShaItem {
+    pub name: &'static str, // 劫煞 / 灾煞 / 岁煞
+    pub zhi: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SanShaDirection {
+    pub direction: String, // 东/南/西/北
+    pub ju: String,        // 金局/木局/水局/火局
+    pub zhi: Vec<String>,  // 三煞三支，如 [寅,卯,辰]
+    pub sha_list: Vec<SanShaItem>, // 三支具名：劫煞/灾煞/岁煞（对齐 zeri.js sanshaLabel）
+    pub note: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TongshuResult {
     pub ganzhi_date: String,
@@ -16,6 +40,8 @@ pub struct TongshuResult {
     pub wutu_solar: &'static str,      // 乌兔太阳到山到向
     pub events: Vec<TongshuEvent>,
     pub summary: &'static str,
+    pub jin_shen_qisha: JinShenQiSha,
+    pub san_sha_direction: SanShaDirection,
 }
 
 pub const XIU_28: [&str; 28] = [
@@ -39,7 +65,11 @@ pub fn calculate_tongshu(
     );
 
     // 1. 二十八宿值日推算 (每28天一轮转)
-    let xiu_idx = (day_since_epoch.rem_euclid(28)) as usize;
+    // 修复 P1-8：原锚点未对齐历表，day_since_epoch 直接 rem_euclid(28) 导致值日宿整体偏移 11 天。
+    // 经与 JS 原版/权威历表核对：2026-10-01=奎木狼[14]、2026-10-02=娄金狗[15]、2026-09-25=牛金牛[8]，
+    // 线性一致，故在日序上补偿 +11 个宿位使纪元锚点对齐。
+    const XIU_EPOCH_OFFSET: i64 = 11;
+    let xiu_idx = (day_since_epoch + XIU_EPOCH_OFFSET).rem_euclid(28) as usize;
     let xiu_name = XIU_28[xiu_idx];
 
     // 2. 董公择日评级 (根据月令与日支生克关系)
@@ -111,6 +141,50 @@ pub fn calculate_tongshu(
         },
     ];
 
+    // 5. 金神七煞（P2-7，对齐 JS donggong.js:DONGGONG_JINSHEN_XIU）：
+    //    值日宿命中 角/亢/奎/娄/鬼/牛/星 七星 → 大凶，三吉星亦不能解。
+    //    对应 XIU_28 索引：角0 亢1 牛8 奎14 娄15 鬼21 星22。
+    const JINSHEN_XIU_IDX: [usize; 7] = [0, 1, 8, 14, 15, 21, 22];
+    let jin_active = JINSHEN_XIU_IDX.contains(&xiu_idx);
+    let jin_shen_qisha = JinShenQiSha {
+        active: jin_active,
+        xiu: xiu_name.to_string(),
+        note: if jin_active {
+            format!("{}值日，金神七煞·大凶切不可犯（三吉星亦不能解）", xiu_name)
+        } else {
+            "当日未遇金神七煞".to_string()
+        },
+    };
+
+    // 6. 三煞方（P2-7，对齐 JS donggong.js + fengshuiData ZHI_SANHE_JU/SANSHA_BY_JU）：
+    //    按节气月建支(month_zhi_idx)三合局，帝旺对冲三山；中支定方位。
+    let month_zhi = crate::bazi_exact::DIZHI[month_zhi_idx % 12];
+    let (ju, sha_zhi): (&str, [&str; 3]) = match month_zhi {
+        "申" | "子" | "辰" => ("水局", ["巳", "午", "未"]), // 水局煞南
+        "寅" | "午" | "戌" => ("火局", ["亥", "子", "丑"]), // 火局煞北
+        "亥" | "卯" | "未" => ("木局", ["申", "酉", "戌"]), // 木局煞西
+        _ => ("金局", ["寅", "卯", "辰"]),                 // 巳酉丑金局煞东
+    };
+    let direction = match sha_zhi[1] {
+        "午" => "南",
+        "子" => "北",
+        "卯" => "东",
+        _ => "西", // 酉
+    };
+    let san_sha_direction = SanShaDirection {
+        direction: direction.to_string(),
+        ju: ju.to_string(),
+        zhi: sha_zhi.iter().map(|s| s.to_string()).collect(),
+        // 三支具名：zeri.js sanshaLabel = [劫煞, 灾煞, 岁煞]，与 SANSHA_BY_JU 顺序一一对应。
+        sha_list: [
+            SanShaItem { name: "劫煞", zhi: sha_zhi[0].to_string() },
+            SanShaItem { name: "灾煞", zhi: sha_zhi[1].to_string() },
+            SanShaItem { name: "岁煞", zhi: sha_zhi[2].to_string() },
+        ]
+        .to_vec(),
+        note: format!("{}方（{}·{}）忌修造动土", direction, sha_zhi.join(""), ju),
+    };
+
     TongshuResult {
         ganzhi_date,
         donggong_rating,
@@ -118,5 +192,7 @@ pub fn calculate_tongshu(
         wutu_solar: wutu,
         events,
         summary,
+        jin_shen_qisha,
+        san_sha_direction,
     }
 }
