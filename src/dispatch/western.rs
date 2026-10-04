@@ -1,26 +1,82 @@
 use serde_json::Value;
 use crate::dispatcher::UniversalInput;
 
+/// P1-13: 按行星名称定位黄经（替代硬编码数组下标）。
+/// en 匹配英文名子串，cn 匹配中文名子串；未找到返回 0.0。
+fn planet_lon_by_name(planets: &[crate::ephem::PlanetPosition], en: &str, cn: &str) -> f64 {
+    planets
+        .iter()
+        .find(|p| p.name.contains(en) || p.name.contains(cn))
+        .map(|p| p.longitude)
+        .unwrap_or(0.0)
+}
+
+/// P2-18: 改进月亮空亡 (Void Of Course, VOC) 判定。
+/// 不再用"星座末 3°"近似，而是检查月亮在离开当前星座前，
+/// 是否还会与其他主要行星形成主要相位 (合/冲/拱/刑/六合)；若不会则为空亡。
+fn moon_is_void_of_course(moon_lon: f64, planets: &[crate::ephem::PlanetPosition]) -> bool {
+    let sign_start = (moon_lon / 30.0).floor() * 30.0;
+    let sign_end = sign_start + 30.0;
+    let remaining = sign_end - moon_lon; // 0..30
+    // 主要相位触发点相对行星的偏移（±方向都算）
+    let triggers: [f64; 9] = [0.0, 60.0, 90.0, 120.0, 180.0, -60.0, -90.0, -120.0, -180.0];
+    for p in planets {
+        if p.name.contains("Moon") || p.name.contains("月亮") {
+            continue;
+        }
+        for &off in &triggers {
+            let trigger = (p.longitude + off).rem_euclid(360.0);
+            let rel = (trigger - moon_lon).rem_euclid(360.0);
+            // 月亮在离开星座前会经过该相位点 → 不空亡
+            if rel > 0.01 && rel <= remaining + 0.01 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// 解析目标时间参数为儒略日（第二盘用）：target_date > target_year > age(岁→日)
+fn target_jde(input: &UniversalInput, base_jde: f64) -> Option<f64> {
+    if let Some(ref td) = input.target_date {
+        if let Some((y, m, d)) = crate::dispatcher::parse_date_str(td) {
+            return Some(crate::bazi_exact::to_julian_day(y, m, d, 12, 0, 0));
+        }
+    }
+    if let Some(ty) = input.target_year {
+        return Some(crate::bazi_exact::to_julian_day(ty, 6, 15, 12, 0, 0));
+    }
+    if let Some(a) = input.age {
+        return Some(base_jde + a * 365.2422);
+    }
+    None
+}
+
 /// 西洋占星、古典希腊、巴比伦、乌拉尼亚、吠陀印占及推运核心分发处理器
 pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Result<Value, String>> {
     let res = match tool {
         // 古典占星与本命盘
-        "chart" | "natal" | "transit" | "synastry" | "composite_chart" | "davison" => {
+        "chart" | "natal" | "transit" => {
             let jde = input.get_julian_day();
             let (lat, lon, _) = input.get_location();
             let hsys = input.hsys.as_deref().unwrap_or("placidus");
+            // P1-16: 用户传入白名单外分宫制 → 显式错误，不再静默回退 Placidus
+            if let Err(e) = crate::western_full::validate_hsys(hsys) {
+                return Some(Err(e));
+            }
             let chart = crate::western_full::calculate_full_astro_chart(jde, lat, lon, hsys);
 
             // 联动 tiaowen.bin 烘焙萨比恩 360 度象征
             let mut sabian_info = None;
             if let Some(tiaowen_path) = crate::db::resolve_data_path("tiaowen.bin") {
                 if let Ok(db) = crate::db::XuanshiDatabase::open(tiaowen_path) {
-                    let sun_deg = chart.planets.first().map(|p| p.longitude as usize + 1).unwrap_or(1);
+                    let sun_deg = chart.planets.iter().find(|p| p.name.contains("Sun") || p.name.contains("太阳")).map(|p| p.longitude as usize + 1).unwrap_or(1);
                     sabian_info = db.get_sabian_symbol(sun_deg);
                 }
             }
 
-            let has_ephem_slices = crate::db::SepkDatabase::has_baked_slices();
+            // R3/P2-4: 移除冗余 has_ephem_slices 绑定（ephemeris_source 统一由
+            // crate::ephem::get_ephemeris_source() 内部一次性探测，避免重复解压）。
             let mut result = serde_json::json!({
                 "technique": tool,
                 "jde": chart.jde,
@@ -30,19 +86,125 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                 "mc": chart.mc,
                 "armc": chart.armc,
                 "house_system": chart.house_system,
+                "house_system_note": chart.house_system_note,
                 "houses": chart.houses,
                 "planets": chart.planets,
                 "aspects": chart.aspects,
                 "lots": chart.lots,
                 "fixed_stars": chart.fixed_stars,
-                "ephemeris_source": if has_ephem_slices { "Swiss Ephemeris SEPK Baked Slices (JPL DE441)" } else { "Analytical VSOP87 & Perturbations (Standalone Fallback)" },
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
                 "chart": chart,
-                "summary": format!("西洋占星排盘 [{}]: 上升 ASC【{:.2}°】，中天 MC【{:.2}°】，十大天体黄道排布完备", tool, chart.ascendant, chart.mc)
+                "summary": format!("西洋占星本命盘 [{}]: 上升 ASC【{:.2}°】，中天 MC【{:.2}°】", tool, chart.ascendant, chart.mc)
             });
             if let Some(s) = sabian_info {
                 result["sun_sabian_symbol"] = s;
             }
             Ok(result)
+        }
+        // 修复 P1-16：composite/synastry/davison 不再静默映射为单盘，改为真正的双盘计算
+        "composite_chart" | "synastry" | "davison" => {
+            let jde1 = input.get_julian_day();
+            let (lat1, lon1, _) = input.get_location();
+            // P0-2: target_date/target_year/age 缺失时返回清晰错误（保持现有清晰报错文案）
+            let jde2 = match target_jde(input, jde1) {
+                Some(v) => v,
+                None => return Some(Err(format!("技法 [{}] 需要第二时间参数: target_date / target_year / age", tool))),
+            };
+            let (lat2, lon2) = if input.target_lat.is_some() && input.target_lon.is_some() {
+                (input.target_lat.unwrap_or(lat1), input.target_lon.unwrap_or(lon1))
+            } else {
+                (lat1, lon1)
+            };
+            let hsys = input.hsys.as_deref().unwrap_or("placidus");
+            // P1-16: 白名单外分宫制显式报错
+            if let Err(e) = crate::western_full::validate_hsys(hsys) {
+                return Some(Err(e));
+            }
+
+            // 组合中点时间与中点经纬度（composite 与 davison 共用）
+            let jde_mid = (jde1 + jde2) / 2.0;
+            let lat_mid = (lat1 + lat2) / 2.0;
+            let lon_mid = (lon1 + lon2) / 2.0;
+
+            if tool == "composite_chart" {
+                // P1-5: 基于组合中点时间 + 中点经纬度构建完整星盘（ASC/MC、12宫位、行星、相位、阿拉伯点、恒星），
+                // 输出结构与 davison 对齐；同时保留逐行星黄经中点数组。
+                let chart1 = crate::western_full::calculate_full_astro_chart(jde1, lat1, lon1, hsys);
+                let chart2 = crate::western_full::calculate_full_astro_chart(jde2, lat2, lon2, hsys);
+                let cchart = crate::western_full::calculate_full_astro_chart(jde_mid, lat_mid, lon_mid, hsys);
+                let mids = crate::western_full::calculate_composite_chart(jde1, jde2);
+                Ok(serde_json::json!({
+                    "technique": "composite_chart",
+                    "jde1": jde1, "jde2": jde2,
+                    "lat1": lat1, "lon1": lon1,
+                    "lat2": lat2, "lon2": lon2,
+                    "chart1": chart1, "chart2": chart2,
+                    "jde_mid": jde_mid,
+                    "lat_mid": lat_mid, "lon_mid": lon_mid,
+                    "ascendant": cchart.ascendant,
+                    "mc": cchart.mc,
+                    "house_system": cchart.house_system,
+                    "house_system_note": cchart.house_system_note,
+                    "houses": cchart.houses,
+                    "planets": cchart.planets,
+                    "aspects": cchart.aspects,
+                    "lots": cchart.lots,
+                    "fixed_stars": cchart.fixed_stars,
+                    "ephemeris_source": crate::ephem::get_ephemeris_source(),
+                    "chart": cchart,
+                    "midpoint_count": mids.len(),
+                    "midpoints": mids,
+                    "summary": format!("组合盘 (Composite): 中点时间 {:.1}°经纬 ({:.2},{:.2}) 完整星盘，含 {} 组逐行星中点", jde_mid, lat_mid, lon_mid, mids.len())
+                }))
+            } else if tool == "synastry" {
+                let chart1 = crate::western_full::calculate_full_astro_chart(jde1, lat1, lon1, hsys);
+                let chart2 = crate::western_full::calculate_full_astro_chart(jde2, lat2, lon2, hsys);
+                let pairs: Vec<serde_json::Value> = chart1.planets.iter().zip(chart2.planets.iter()).map(|(a, b)| {
+                    let mut diff = (a.longitude - b.longitude).abs();
+                    if diff > 180.0 { diff = 360.0 - diff; }
+                    serde_json::json!({
+                        "planet": a.name,
+                        "person_a_lon": a.longitude,
+                        "person_b_lon": b.longitude,
+                        "orb": diff,
+                        "aspect_hint": if diff < 8.0 { "合相" } else if (diff - 60.0).abs() < 6.0 { "六合" } else if (diff - 90.0).abs() < 8.0 { "刑" } else if (diff - 120.0).abs() < 8.0 { "三合" } else if (diff - 180.0).abs() < 8.0 { "冲" } else { "无主相位" }
+                    })
+                }).collect();
+                Ok(serde_json::json!({
+                    "technique": "synastry",
+                    "jde1": jde1, "jde2": jde2,
+                    "chart1": chart1,
+                    "chart2": chart2,
+                    "synastry_pairs": pairs,
+                    "ephemeris_source": crate::ephem::get_ephemeris_source(),
+                    "summary": format!("合盘 (Synastry): 双人本命盘逐行星对照，共 {} 组交互相位", pairs.len())
+                }))
+            } else {
+                // davison: 两盘时空与经纬的中点盘（中点值已在分支顶部统一计算）
+                // R3/P2-6: 输出结构与 composite_chart 对齐，补扁平字段 + ephemeris_source
+                let chart1 = crate::western_full::calculate_full_astro_chart(jde1, lat1, lon1, hsys);
+                let chart2 = crate::western_full::calculate_full_astro_chart(jde2, lat2, lon2, hsys);
+                let dchart = crate::western_full::calculate_full_astro_chart(jde_mid, lat_mid, lon_mid, hsys);
+                Ok(serde_json::json!({
+                    "technique": "davison",
+                    "jde1": jde1, "jde2": jde2,
+                    "chart1": chart1, "chart2": chart2,
+                    "jde_mid": jde_mid,
+                    "lat_mid": lat_mid, "lon_mid": lon_mid,
+                    "ascendant": dchart.ascendant,
+                    "mc": dchart.mc,
+                    "house_system": dchart.house_system,
+                    "house_system_note": dchart.house_system_note,
+                    "houses": dchart.houses,
+                    "planets": dchart.planets,
+                    "aspects": dchart.aspects,
+                    "lots": dchart.lots,
+                    "fixed_stars": dchart.fixed_stars,
+                    "ephemeris_source": crate::ephem::get_ephemeris_source(),
+                    "chart": dchart,
+                    "summary": format!("戴维斯关系盘 (Davison): 双人出生时空与经纬中点盘，关系演化主轴")
+                }))
+            }
         }
         "chart12" => {
             let jde = input.get_julian_day();
@@ -64,6 +226,7 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                 "ascendant": dwad_asc,
                 "mc": dwad_mc,
                 "planets": dwad_planets,
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
                 "base_chart": chart,
                 "summary": "十二分盘 / Dwadasamsa: 黄经乘以 12 阶展开，微黄道深入潜意识细分格局"
             });
@@ -82,11 +245,16 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                 p2.degree_in_sign = deg;
                 p2
             }).collect();
+            // P2-4: 十三分盘相位（在 13 倍展开后的行星位置上复用相位计算逻辑）
+            let h13_aspects = crate::western_full::calculate_aspects(&h13_planets);
             let result = serde_json::json!({
                 "technique": "chart13",
                 "ascendant": chart.ascendant,
                 "mc": chart.mc,
                 "planets": h13_planets,
+                "aspects": h13_aspects,
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
+                "base_chart": chart,
                 "summary": "十三分扩展盘: 十三谐波展开与蛇夫座维度拓扑"
             });
             Ok(result)
@@ -104,6 +272,7 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                 "mc": chart.mc,
                 "houses": chart.houses,
                 "planets": chart.planets,
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
                 "chart": chart,
                 "summary": format!("重置星盘 (Relocation Chart): 重定位至 ({:.2}°, {:.2}°)，新上升点 ASC【{:.2}°】", target_lat, target_lon, chart.ascendant)
             });
@@ -129,8 +298,9 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
             let sr_jde = crate::western_full::find_exact_solar_return(jde, target_year);
             let chart = crate::western_full::calculate_full_astro_chart(sr_jde, lat, lon, "placidus");
             let p_birth = crate::ephem::calculate_planetary_positions(jde);
-            let natal_sun = p_birth[0].longitude;
-            let return_sun = chart.planets[0].longitude;
+            // 修复 P1：按名称定位太阳（不再依赖第 0 位索引，防顺序变更错算）
+            let natal_sun = p_birth.iter().find(|p| p.name.contains("Sun") || p.name.contains("太阳")).map(|p| p.longitude).unwrap_or(p_birth[0].longitude);
+            let return_sun = chart.planets.iter().find(|p| p.name.contains("Sun") || p.name.contains("太阳")).map(|p| p.longitude).unwrap_or(chart.planets[0].longitude);
             let diff = (return_sun - natal_sun).abs();
             let result = serde_json::json!({
                 "technique": "solarreturn",
@@ -142,8 +312,10 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                 "sun_lon_diff": diff,
                 "ascendant": chart.ascendant,
                 "mc": chart.mc,
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
                 "chart": chart,
                 "planets": chart.planets,
+                "return_chart_location_note": "返照时刻仅由太阳回归决定（与地点无关）；返照盘的宫位/ASC按出生地经纬度计算",
                 "summary": format!("太阳返照盘: 太阳精确回归本命度数 {:.4}° (差值 {:.6}°)，返照年 {} 年排盘完毕", natal_sun, diff, target_year)
             });
             Ok(result)
@@ -160,8 +332,9 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
             let lr_jde = crate::western_full::find_exact_lunar_return(jde, cycles);
             let chart = crate::western_full::calculate_full_astro_chart(lr_jde, lat, lon, "placidus");
             let p_birth = crate::ephem::calculate_planetary_positions(jde);
-            let natal_moon = p_birth[1].longitude;
-            let return_moon = chart.planets[1].longitude;
+            // P1-13: 按名称定位月亮，不再硬编码 p_birth[1]
+            let natal_moon = planet_lon_by_name(&p_birth, "Moon", "月亮");
+            let return_moon = planet_lon_by_name(&chart.planets, "Moon", "月亮");
             let diff = (return_moon - natal_moon).abs();
             let result = serde_json::json!({
                 "technique": "lunarreturn",
@@ -172,8 +345,10 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                 "moon_lon_diff": diff,
                 "ascendant": chart.ascendant,
                 "mc": chart.mc,
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
                 "chart": chart,
                 "planets": chart.planets,
+                "return_chart_location_note": "返照时刻仅由月亮回归决定（与地点无关）；返照盘的宫位/ASC按出生地经纬度计算",
                 "summary": format!("月亮返照盘: 月亮精确回归本命度数 {:.4}° (差值 {:.6}°)", natal_moon, diff)
             });
             Ok(result)
@@ -181,7 +356,15 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
         "lunationphase" => {
             let jde = input.get_julian_day();
             let phase = crate::western_full::calculate_lunation_phase(jde);
-            serde_json::to_value(phase).map_err(|e| e.to_string())
+            // R4/P2-1: 月相含 moon_lon/sun_lon 行星黄经，补 ephemeris_source
+            let mut val = match serde_json::to_value(phase) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e.to_string())),
+            };
+            if let Some(obj) = val.as_object_mut() {
+                obj.insert("ephemeris_source".to_string(), serde_json::json!(crate::ephem::get_ephemeris_source()));
+            }
+            Ok(val)
         }
         "prenatalsyzygy" => {
             let jde = input.get_julian_day();
@@ -268,12 +451,15 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
             let q_type = input.question_type.as_deref().unwrap_or("marriage");
             let (asc_sign, _) = crate::ephem::get_zodiac_sign(chart.ascendant);
             let hr = crate::horary::calculate_horary(jde, asc_sign, q_type);
+            // P2-1: 卜卦盘输出主要相位数组（复用 chart 相位计算）
             let result = serde_json::json!({
                 "technique": "horary",
                 "ascendant": chart.ascendant,
                 "mc": chart.mc,
                 "houses": chart.houses,
                 "planets": chart.planets,
+                "aspects": chart.aspects,
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
                 "horary_judgment": hr,
                 "summary": format!("西洋卜卦占星 (Horary): 上升 ASC【{:.2}° {}】，事项【{}】，完成法【{}】", chart.ascendant, asc_sign, hr.category, hr.perfection_mode)
             });
@@ -284,17 +470,21 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
             let lat = input.lat.unwrap_or(31.23);
             let lon = input.lon.unwrap_or(121.47);
             let chart = crate::western_full::calculate_full_astro_chart(jde, lat, lon, "placidus");
-            let moon = &chart.planets[1];
-            let is_voc = (moon.longitude % 30.0) > 27.0; // 简易空亡度数标志
+            let moon_lon = planet_lon_by_name(&chart.planets, "Moon", "月亮");
+            // P2-18: 改进月亮空亡判定——检查离宫前是否还会与主要行星成主要相位
+            let is_voc = moon_is_void_of_course(moon_lon, &chart.planets);
+            let (moon_sign, moon_deg) = crate::ephem::get_zodiac_sign(moon_lon);
             let result = serde_json::json!({
                 "technique": "election",
                 "ascendant": chart.ascendant,
                 "mc": chart.mc,
                 "planets": chart.planets,
-                "moon_sign": moon.sign,
-                "moon_degree": moon.degree_in_sign,
+                "aspects": chart.aspects,
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
+                "moon_sign": moon_sign,
+                "moon_degree": moon_deg,
                 "void_of_course": is_voc,
-                "summary": format!("西洋择日占星 (Election): 择日上升点【{:.2}°】，月亮落【{} {:.2}°】，空亡判定【{}】", chart.ascendant, moon.sign, moon.degree_in_sign, if is_voc { "月亮空亡" } else { "月行顺畅" })
+                "summary": format!("西洋择日占星 (Election): 择日上升点【{:.2}°】，月亮落【{} {:.2}°】，空亡判定【{}】", chart.ascendant, moon_sign, moon_deg, if is_voc { "月亮空亡" } else { "月行顺畅" })
             });
             Ok(result)
         }
@@ -324,8 +514,15 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                     }
                 }
             }
+            // R3/P2-2: ascendant 缺省时不再静默回退 45°，附加 note 提示用户
+            let asc_from_input = input.ascendant.is_some();
+            let asc_val = input.ascendant.unwrap_or(45.0);
             if let Some(obj) = val.as_object_mut() {
-                obj.insert("ascendant".to_string(), serde_json::json!(input.ascendant.unwrap_or(45.0)));
+                obj.insert("ascendant".to_string(), serde_json::json!(asc_val));
+                obj.insert("ephemeris_source".to_string(), serde_json::json!(crate::ephem::get_ephemeris_source()));
+                if !asc_from_input {
+                    obj.insert("note".to_string(), serde_json::json!("ascendant 未提供，使用默认 45.0°（白羊座15°），建议提供精确出生时间/地点以获得准确上升点"));
+                }
             }
             Ok(val)
         }
@@ -343,16 +540,27 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                 (name, p.longitude)
             }).collect();
             let gm = crate::germany::calculate_uranian(jde, &planets_tuple);
-            serde_json::to_value(gm).map_err(|e| e.to_string())
+            // R4/P2-1: 汉堡学派含行星中点/黄经，补 ephemeris_source
+            let mut val = match serde_json::to_value(gm) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e.to_string())),
+            };
+            if let Some(obj) = val.as_object_mut() {
+                obj.insert("ephemeris_source".to_string(), serde_json::json!(crate::ephem::get_ephemeris_source()));
+            }
+            Ok(val)
         }
         "guolao" | "guolao_chart" | "qizhengkin" => {
             let jde = input.get_julian_day();
+            // R3/P2-2: ascendant 缺省且无经纬度时回退 45°，并附加 note 提示（不再静默）
+            let mut asc_fellback = false;
             let asc = if let Some(a) = input.ascendant {
                 a
             } else if input.lat.is_some() || input.lon.is_some() {
                 let (la, lo, _) = input.get_location();
                 crate::western_full::calculate_full_astro_chart(jde, la, lo, "placidus").ascendant
             } else {
+                asc_fellback = true;
                 45.0
             };
             let gl = crate::guolao::calculate_guolao(jde, asc);
@@ -370,6 +578,10 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                     if let Some(obj) = val.as_object_mut() {
                         obj.insert("planets".to_string(), serde_json::Value::Array(planets));
                         obj.insert("ascendant".to_string(), serde_json::json!(asc));
+                        obj.insert("ephemeris_source".to_string(), serde_json::json!(crate::ephem::get_ephemeris_source()));
+                        if asc_fellback {
+                            obj.insert("note".to_string(), serde_json::json!("ascendant 未提供且无经纬度，使用默认 45.0°（白羊座15°），建议提供精确出生时间/地点以获得准确上升点"));
+                        }
                         if let Some(p) = crate::db::resolve_data_path("tiaowen.bin") {
                             if let Ok(db) = crate::db::XuanshiDatabase::open(p) {
                                 if let Some(zg) = db.get_zhangguo_stars() {
@@ -409,6 +621,7 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
             }
             if let Some(obj) = val.as_object_mut() {
                 obj.insert("ascendant".to_string(), serde_json::json!(asc));
+                obj.insert("ephemeris_source".to_string(), serde_json::json!(crate::ephem::get_ephemeris_source()));
             }
             Ok(val)
         }
@@ -484,8 +697,8 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
         }
         "distributions" => {
             let jde = input.get_julian_day();
-            let lat = input.lat.unwrap_or(39.9);
-            let lon = input.lon.unwrap_or(116.4);
+            let lat = input.lat.unwrap_or(31.23);
+            let lon = input.lon.unwrap_or(121.47);
             let full_chart = crate::western_full::calculate_full_astro_chart(jde, lat, lon, "placidus");
             let asc = full_chart.ascendant;
             let max_years = input.age.unwrap_or(80.0);
@@ -515,16 +728,8 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
         }
         "planetaryages" => {
             let age = input.age.unwrap_or(30.0);
-            let bands = [
-                ("Moon", "月亮", 0.0, 4.0),
-                ("Mercury", "水星", 4.0, 14.0),
-                ("Venus", "金星", 14.0, 22.0),
-                ("Sun", "太阳", 22.0, 41.0),
-                ("Mars", "火星", 41.0, 56.0),
-                ("Jupiter", "木星", 56.0, 68.0),
-                ("Saturn", "土星", 68.0, 120.0),
-            ];
-            let active = bands.iter().find(|b| age >= b.2 && age < b.3).unwrap_or(&bands[3]);
+            // P2-20: 七阶年龄段已抽取到 src/planetaryages.rs，dispatch 层只做调用
+            let active = crate::planetaryages::active_age_band(age);
             let result = serde_json::json!({
                 "technique": "planetaryages",
                 "age": age,
@@ -582,6 +787,7 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                 "mc": chart.mc,
                 "chart": chart,
                 "planets": chart.planets,
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
                 "summary": format!("龙盘 (Draconic Chart): 以北交点 {:.2}° 归零白羊 0° 重新排布之宿命交点盘", node_lon)
             });
             Ok(result)
@@ -610,19 +816,24 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
             };
 
             let sa = crate::predictive::calculate_solar_arc(birth_jde, target_jde);
-            let mut planets = crate::ephem::calculate_planetary_positions(birth_jde);
+            // P2-5: 保留本命行星副本，用于计算太阳弧推运行星与本命行星的交叉相位
+            let natal_planets = crate::ephem::calculate_planetary_positions(birth_jde);
+            let mut planets = natal_planets.clone();
             for p in planets.iter_mut() {
                 p.longitude = (p.longitude + sa.arc_degree).rem_euclid(360.0);
                 let (sign, deg) = crate::ephem::get_zodiac_sign(p.longitude);
                 p.sign = sign;
                 p.degree_in_sign = deg;
             }
+            let cross_aspects = crate::western_full::calculate_cross_aspects(&planets, &natal_planets);
 
             let result = serde_json::json!({
                 "technique": "solararc",
                 "arc_degree": sa.arc_degree,
                 "age_years": sa.age_years,
                 "planets": planets,
+                "aspects": cross_aspects,
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
                 "summary": format!("太阳弧推运: 弧长 {:.4}°，对应年龄 {:.2} 岁", sa.arc_degree, sa.age_years)
             });
             Ok(result)
@@ -639,10 +850,15 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                 p.sign = sign;
                 p.degree_in_sign = deg;
             }
+            // P2-5: 谐波行星与本命行星交叉相位
+            let natal_planets = crate::ephem::calculate_planetary_positions(jde);
+            let cross_aspects = crate::western_full::calculate_cross_aspects(&planets, &natal_planets);
             let result = serde_json::json!({
                 "technique": "harmonic",
                 "harmonic": h,
                 "planets": planets,
+                "aspects": cross_aspects,
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
                 "summary": format!("泛音/谐波盘 (Harmonic H{:.0}): 黄经倍率放大，同频共振格局", h)
             });
             Ok(result)
@@ -665,10 +881,18 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
         }
         "mundane" => {
             let (y, _, _, _, _, _) = input.get_datetime();
-            let lat = input.lat.unwrap_or(39.9);
-            let lon = input.lon.unwrap_or(116.4);
+            let lat = input.lat.unwrap_or(31.23);
+            let lon = input.lon.unwrap_or(121.47);
             let md = crate::mundane::calculate_mundane(y, lon, lat);
-            serde_json::to_value(md).map_err(|e| e.to_string())
+            // R4/P2-1: 世运盘含 houses/ingresses 行星黄经，补 ephemeris_source
+            let mut val = match serde_json::to_value(md) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e.to_string())),
+            };
+            if let Some(obj) = val.as_object_mut() {
+                obj.insert("ephemeris_source".to_string(), serde_json::json!(crate::ephem::get_ephemeris_source()));
+            }
+            Ok(val)
         }
         "ephemeris" | "planet_cycles" => {
             let jde = input.get_julian_day();
@@ -679,9 +903,10 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                 "julian_day": jde,
                 "planets_count": planets.len(),
                 "planets": planets,
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
                 "sepk_baked_slices_count": sepk_slices.len(),
                 "sepk_slices": sepk_slices.iter().map(|s| s.file_name.as_str()).collect::<Vec<_>>(),
-                "summary": format!("600年高精度物理星历天体位置与轨道周期 (预烘焙切片包接入: {} 组)", sepk_slices.len())
+                "summary": format!("600年高精度物理星历天体位置与轨道周期 (预烘焙切片包接入: {} 组；行星位置口径见 ephemeris_source)", sepk_slices.len())
             });
             Ok(result)
         }
@@ -698,10 +923,13 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
             }
             let result = serde_json::json!({
                 "technique": "returntimeline",
-                "natal_sun": p_birth[0].longitude,
+                // P1-13: 按名称定位太阳，不再硬编码 p_birth[0]
+                "natal_sun": planet_lon_by_name(&p_birth, "Sun", "太阳"),
                 "start_year": start_yr,
                 "end_year": end_yr,
                 "timeline": timeline,
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
+                "return_chart_location_note": "各年太阳回归时刻仅由太阳回归决定（与地点无关）；若据此排返照盘，宫位/ASC按出生地经纬度计算",
                 "summary": "多行星回归时间轴推运 (Return Timeline) 序列计算完备"
             });
             Ok(result)
@@ -709,25 +937,28 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
         "extrareturns" => {
             let jde = input.get_julian_day();
             let p_birth = crate::ephem::calculate_planetary_positions(jde);
+            // P1-13: 按名称定位水金火木土，不再硬编码 p_birth[2..6]
             let returns = serde_json::json!([
-                { "planet": "Mercury", "natal_lon": p_birth[2].longitude, "cycle_years": 0.24 },
-                { "planet": "Venus", "natal_lon": p_birth[3].longitude, "cycle_years": 0.62 },
-                { "planet": "Mars", "natal_lon": p_birth[4].longitude, "cycle_years": 1.88 },
-                { "planet": "Jupiter", "natal_lon": p_birth[5].longitude, "cycle_years": 11.86 },
-                { "planet": "Saturn", "natal_lon": p_birth[6].longitude, "cycle_years": 29.46 }
+                { "planet": "Mercury", "natal_lon": planet_lon_by_name(&p_birth, "Mercury", "水星"), "cycle_years": 0.24 },
+                { "planet": "Venus", "natal_lon": planet_lon_by_name(&p_birth, "Venus", "金星"), "cycle_years": 0.62 },
+                { "planet": "Mars", "natal_lon": planet_lon_by_name(&p_birth, "Mars", "火星"), "cycle_years": 1.88 },
+                { "planet": "Jupiter", "natal_lon": planet_lon_by_name(&p_birth, "Jupiter", "木星"), "cycle_years": 11.86 },
+                { "planet": "Saturn", "natal_lon": planet_lon_by_name(&p_birth, "Saturn", "土星"), "cycle_years": 29.46 }
             ]);
             let result = serde_json::json!({
                 "technique": "extrareturns",
                 "natal_positions": p_birth,
                 "returns": returns,
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
+                "return_chart_location_note": "各行星回归时刻仅由该行星回归决定（与地点无关）；若据此排返照盘，宫位/ASC按出生地经纬度计算",
                 "summary": "外行星返照推运 (Extra Returns): 水金火木土五星本命回归周期解算完备"
             });
             Ok(result)
         }
         "agepoint" => {
             let jde = input.get_julian_day();
-            let lat = input.lat.unwrap_or(39.9);
-            let lon = input.lon.unwrap_or(116.4);
+            let lat = input.lat.unwrap_or(31.23);
+            let lon = input.lon.unwrap_or(121.47);
             let age = input.age.unwrap_or(28.0);
             let chart = crate::western_full::calculate_full_astro_chart(jde, lat, lon, "placidus");
             let ap = crate::western_dyn::calculate_huber_age_point(chart.ascendant, age);
@@ -735,6 +966,7 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
             let mut val = serde_json::to_value(&ap).unwrap_or_default();
             val["planets"] = serde_json::to_value(&p_prog.planets).unwrap_or_default();
             val["ascendant"] = serde_json::json!(chart.ascendant);
+            val["ephemeris_source"] = serde_json::json!(crate::ephem::get_ephemeris_source());
             Ok(val)
         }
         "planetaryarc" => {
@@ -744,6 +976,7 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
             let pa = crate::western_dyn::calculate_planetary_arc(jde, age, base_planet);
             let mut val = serde_json::to_value(&pa).unwrap_or_default();
             val["planets"] = serde_json::to_value(&pa.directed_planets).unwrap_or_default();
+            val["ephemeris_source"] = serde_json::json!(crate::ephem::get_ephemeris_source());
             Ok(val)
         }
         "jaynesprog" => {
@@ -752,6 +985,11 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
             let jp = crate::western_dyn::calculate_jaynes_progression(jde, age);
             let mut val = serde_json::to_value(&jp).unwrap_or_default();
             val["planets"] = serde_json::to_value(&jp.progressed_planets).unwrap_or_default();
+            // P2-5: 杰恩斯推运行星与本命行星交叉相位
+            let natal_planets = crate::ephem::calculate_planetary_positions(jde);
+            let cross_aspects = crate::western_full::calculate_cross_aspects(&jp.progressed_planets, &natal_planets);
+            val["aspects"] = serde_json::to_value(&cross_aspects).unwrap_or_default();
+            val["ephemeris_source"] = serde_json::json!(crate::ephem::get_ephemeris_source());
             Ok(val)
         }
         "vedicprog" => {
@@ -761,6 +999,7 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
             let p_prog = crate::western_dyn::calculate_western_progression(jde, age, "secondary");
             let mut val = serde_json::to_value(&vp).unwrap_or_default();
             val["planets"] = serde_json::to_value(&p_prog.planets).unwrap_or_default();
+            val["ephemeris_source"] = serde_json::json!(crate::ephem::get_ephemeris_source());
             Ok(val)
         }
         "givenyear" | "prog" => {
@@ -777,29 +1016,18 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                 "age": age,
                 "progressed_jde": p_prog.progressed_jde,
                 "planets": p_prog.planets,
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
                 "summary": format!("西洋次限推运与指定流年法 [{}] 对应年龄 {:.1} 岁计算完备", tool, age)
             });
             Ok(result)
         }
         "hellen_chart" => {
             let jde = input.get_julian_day();
-            let lat = input.lat.unwrap_or(39.9);
-            let lon = input.lon.unwrap_or(116.4);
+            let lat = input.lat.unwrap_or(31.23);
+            let lon = input.lon.unwrap_or(121.47);
             let chart = crate::western_full::calculate_full_astro_chart(jde, lat, lon, "wholesign");
-            let bounds = [
-                ("白羊座", "木星(0-6°), 金星(6-12°), 水星(12-20°), 火星(20-25°), 土星(25-30°)"),
-                ("金牛座", "金星(0-8°), 水星(8-14°), 木星(14-22°), 土星(22-27°), 火星(27-30°)"),
-                ("双子座", "水星(0-6°), 木星(6-12°), 金星(12-17°), 火星(17-24°), 土星(24-30°)"),
-                ("巨蟹座", "火星(0-7°), 金星(7-13°), 水星(13-19°), 木星(19-26°), 土星(26-30°)"),
-                ("狮子座", "木星(0-6°), 金星(6-11°), 土星(11-18°), 水星(18-24°), 火星(24-30°)"),
-                ("处女座", "水星(0-7°), 金星(7-17°), 木星(17-21°), 火星(21-28°), 土星(28-30°)"),
-                ("天秤座", "土星(0-6°), 水星(6-14°), 木星(14-21°), 金星(21-28°), 火星(28-30°)"),
-                ("天蝎座", "火星(0-7°), 金星(7-11°), 水星(11-19°), 木星(19-24°), 土星(24-30°)"),
-                ("射手座", "木星(0-12°), 金星(12-17°), 水星(17-21°), 土星(21-26°), 火星(26-30°)"),
-                ("摩羯座", "水星(0-7°), 木星(7-14°), 金星(14-22°), 土星(22-26°), 火星(26-30°)"),
-                ("水瓶座", "水星(0-7°), 金星(7-13°), 木星(13-20°), 火星(20-25°), 土星(25-30°)"),
-                ("双鱼座", "金星(0-12°), 木星(12-16°), 水星(16-19°), 火星(19-28°), 土星(28-30°)"),
-            ];
+            // P2-11: 埃及界整表已移至 src/hellen.rs 的 EGYPTIAN_BOUNDS 常量，dispatch 只做引用
+            let bounds = crate::hellen::EGYPTIAN_BOUNDS;
             let result = serde_json::json!({
                 "technique": "hellen_chart",
                 "system": "希腊占星正典 (Hellenistic Astrology Whole-Sign System)",
@@ -808,6 +1036,7 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                 "mc": chart.mc,
                 "planets": chart.planets,
                 "houses": chart.houses,
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
                 "egyptian_bounds": bounds,
                 "egyptian_bounds_sample": bounds,
                 "sect": if chart.planets[0].longitude > chart.ascendant && chart.planets[0].longitude < chart.ascendant + 180.0 { "夜生人 (Night Sect)" } else { "日生人 (Day Sect)" },
@@ -817,8 +1046,8 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
         }
         "india_rectify" => {
             let jde = input.get_julian_day();
-            let lat = input.lat.unwrap_or(39.9);
-            let lon = input.lon.unwrap_or(116.4);
+            let lat = input.lat.unwrap_or(31.23);
+            let lon = input.lon.unwrap_or(121.47);
             let chart = crate::western_full::calculate_full_astro_chart(jde, lat, lon, "wholesign");
             let (_, _, _, h, min, _) = input.get_datetime();
             let anchor_hour = (h as f64) + ((min as f64) / 60.0);
@@ -845,6 +1074,7 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                 "mc": chart.mc,
                 "planets": chart.planets,
                 "houses": chart.houses,
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
                 "moon_nakshatra": crate::western_dyn::NAKSHATRAS[nak_idx],
                 "active_tattwa": active_tattwa,
                 "kp_rectification": kp_rec,
@@ -854,8 +1084,8 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
         }
         "relative" => {
             let jde = input.get_julian_day();
-            let lat = input.lat.unwrap_or(39.9);
-            let lon = input.lon.unwrap_or(116.4);
+            let lat = input.lat.unwrap_or(31.23);
+            let lon = input.lon.unwrap_or(121.47);
             let chart = crate::western_full::calculate_full_astro_chart(jde, lat, lon, "wholesign");
             let result = serde_json::json!({
                 "technique": "relative",
@@ -864,6 +1094,7 @@ pub fn handle_western_and_astro(tool: &str, input: &UniversalInput) -> Option<Re
                 "mc": chart.mc,
                 "planets": chart.planets,
                 "houses": chart.houses,
+                "ephemeris_source": crate::ephem::get_ephemeris_source(),
                 "summary": "关系占星比较合盘 (Synastry/Relative Chart) 整宫制排盘完备"
             });
             Ok(result)

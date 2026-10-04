@@ -1,12 +1,91 @@
 use serde_json::Value;
 use crate::dispatcher::{UniversalInput, split_gz};
 
+/// 二十四节气（自然年序）：12 节 + 12 气
+const JIE_NAMES: [&str; 12] = ["小寒", "立春", "惊蛰", "清明", "立夏", "芒种", "小暑", "立秋", "白露", "寒露", "立冬", "大雪"];
+const QI_NAMES: [&str; 12] = ["大寒", "雨水", "春分", "谷雨", "小满", "夏至", "大暑", "处暑", "秋分", "霜降", "小雪", "冬至"];
+const JIE_LONS: [f64; 12] = [285.0, 315.0, 345.0, 15.0, 45.0, 75.0, 105.0, 135.0, 165.0, 195.0, 225.0, 255.0];
+
+/// 朴素本地时间戳（北京墙钟按 UTC 秒编码）→ 太阳黄经计算的“真 UTC”JD
+fn naive_ts_to_jd_utc(ts: i64) -> f64 {
+    (ts as f64 - 28800.0) / 86400.0 + 2440587.5
+}
+
+/// “真 UTC”JD → 朴素本地时间戳（与节令表同基准）
+fn jd_utc_to_naive_ts(jd_utc: f64) -> i64 {
+    let (yy, mm, dd, hh, mi, ss) = crate::bazi_exact::jd_to_civil(jd_utc + 8.0 / 24.0);
+    crate::bazi_exact::to_timestamp_seconds(yy, mm, dd, hh, mi, ss)
+}
+
+/// 太阳视黄经二分求入节 JD（真 UTC），以 approx_jd 为中心、±window_days 天内收敛
+fn find_jieqi_jd_utc(target_lon: f64, approx_jd: f64, window_days: f64) -> f64 {
+    let mut lo = approx_jd - window_days;
+    let mut hi = approx_jd + window_days;
+    for _ in 0..48 {
+        let mid = (lo + hi) / 2.0;
+        let cur = crate::bazi_exact::sun_ecliptic_longitude(mid);
+        let mut diff = (cur - target_lon).rem_euclid(360.0);
+        if diff > 180.0 {
+            diff -= 360.0;
+        }
+        if diff > 0.0 {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    (lo + hi) / 2.0
+}
+
+/// 生成某公历年前后各 24 节气边界（naive ts），1900–2100 内 12 节用权威节令表
+fn build_jieqi_boundaries(year: i32, span_years: i32) -> Vec<(String, i64)> {
+    let mut out: Vec<(String, i64)> = Vec::new();
+    for yy in (year - span_years)..=(year + span_years) {
+        if (1900..=2100).contains(&yy) {
+            let row = crate::jieqi_table::JIE_TABLE_1900_2100[(yy - 1900) as usize];
+            for k in 0..12 {
+                let jie_ts = row[k];
+                let qi_ts = jd_utc_to_naive_ts(find_jieqi_jd_utc(
+                    (JIE_LONS[k] + 15.0).rem_euclid(360.0),
+                    naive_ts_to_jd_utc(jie_ts),
+                    25.0,
+                ));
+                out.push((JIE_NAMES[k].to_string(), jie_ts));
+                out.push((QI_NAMES[k].to_string(), qi_ts));
+            }
+        } else {
+            let vernal_approx_jd = crate::bazi_exact::to_julian_day(yy, 3, 20, 12, 0, 0);
+            let mut order: Vec<&str> = Vec::with_capacity(24);
+            for k in 0..12 {
+                order.push(JIE_NAMES[k]);
+                order.push(QI_NAMES[k]);
+            }
+            for (i, name) in order.iter().enumerate() {
+                let target_lon = (JIE_LONS[i / 2] + (i % 2) as f64 * 15.0).rem_euclid(360.0);
+                let approx_days = if target_lon >= 285.0 {
+                    (target_lon - 360.0) / 0.985647
+                } else {
+                    target_lon / 0.985647
+                };
+                let jd = find_jieqi_jd_utc(
+                    target_lon,
+                    vernal_approx_jd + approx_days - 8.0 / 24.0,
+                    30.0,
+                );
+                out.push((name.to_string(), jd_utc_to_naive_ts(jd)));
+            }
+        }
+    }
+    out.sort_by_key(|(_, ts)| *ts);
+    out
+}
+
 /// 易经六爻、河洛理数、残平、神数矩阵、择吉通书、民间杂占及历法实用处理器
 pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Value, String>> {
     let res = match tool {
         // 易经六爻与卦象
         "sixyao" | "liuyao" | "gua_desc" | "gua_meiyi" => {
-            if let Some(ref lines_val) = input.lines {
+            let base: serde_json::Value = if let Some(ref lines_val) = input.lines {
                 let mut line_bits = Vec::new();
                 let mut movings = Vec::new();
                 for l in lines_val {
@@ -24,8 +103,8 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
                     line_bits.push(0);
                     movings.push(false);
                 }
-                let res = crate::liuyao::calculate_liuyao_lines(&line_bits, &movings);
-                Ok(res)
+                serde_json::to_value(crate::liuyao::calculate_liuyao_lines(&line_bits, &movings))
+                    .unwrap_or(serde_json::Value::Null)
             } else {
                 let nums = input.numbers.as_ref().or(input.nums.as_ref());
                 let def_nums = vec![1, 5, 3];
@@ -34,8 +113,24 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
                 let n2 = nums_ref.get(1).copied().unwrap_or(5) as usize;
                 let n3 = nums_ref.get(2).copied().unwrap_or(3) as usize;
                 let ly = crate::liuyao::calculate_liuyao(n1, n2, n3);
-                serde_json::to_value(ly).map_err(|e| e.to_string())
+                serde_json::to_value(ly).unwrap_or(serde_json::Value::Null)
+            };
+            // P2-1 对齐 Python：gua_desc / gua_meiyi 同为卦义查询（Python service.py:7021
+            // _build_gua_lookup_snapshot_text 同一函数，仅"来源：tool_name"标签不同）。
+            // 二者输出相同=对齐Python，非重复桩；此处补来源标签以区分契约。
+            let mut out = base;
+            if tool == "gua_desc" || tool == "gua_meiyi" {
+                if let Some(obj) = out.as_object_mut() {
+                    obj.insert("source".to_string(), serde_json::Value::String(tool.to_string()));
+                    obj.insert(
+                        "source_note".to_string(),
+                        serde_json::Value::String(
+                            "卦义查询（与Python原版一致：gua_desc/gua_meiyi同源卦义，仅来源标签不同）".into(),
+                        ),
+                    );
+                }
             }
+            Ok(out)
         }
 
         "heluo" => {
@@ -123,8 +218,14 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
             Ok(val)
         }
         "tieban" => {
-            let (_, m, d, h, _, _) = input.get_datetime();
-            let tb = crate::tieban::calculate_tieban(m, d, h as usize % 12, 0, true);
+            let (y, m, d, h, _, _) = input.get_datetime();
+            // 修复 P0-03：铁板神数需真实农历月日、日支与时支，且性别决定卦数起例
+            let (_ly, lm, ld, _leap) = crate::lunar_table::solar_to_lunar(y, m, d);
+            let bazi = crate::bazi_exact::calculate_exact_bazi(y, m, d, h, 0, 0);
+            let day_zhi_char = bazi.day_pillar.chars().nth(1).unwrap_or('子');
+            let day_zhi_idx = crate::bazi::DIZHI.iter().position(|&x| x.starts_with(day_zhi_char)).unwrap_or(0);
+            let is_male = input.gender.unwrap_or(1) == 1;
+            let tb = crate::tieban::calculate_tieban(lm, ld, h as usize % 12, day_zhi_idx, is_male);
             let mut val = serde_json::to_value(&tb).unwrap_or(serde_json::Value::Null);
             if let Some(tiaowen_path) = crate::db::resolve_data_path("tiaowen.bin") {
                 if let Ok(db) = crate::db::XuanshiDatabase::open(tiaowen_path) {
@@ -138,7 +239,18 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
             Ok(val)
         }
         "shenshu" | "nanji" | "beiji" | "taixuan" | "wangji" | "cetian" | "chunzi" | "fendjing" | "jingjue" | "shenyishu" | "wuzhao" => {
-            let fam = input.family_key.as_deref().unwrap_or(tool);
+            // 修复 P0-06：泛化工具名 "shenshu" 不再静默回退为第一家（南极），必须显式指定 family_key
+            let fam = match input.family_key.as_deref() {
+                Some(f) => f.to_string(),
+                None => {
+                    if tool == "shenshu" {
+                        return Some(Err(
+                            "技法 [shenshu] 必须显式指定 family_key（nanji/beiji/taixuan/wangji/cetian/chunzi/fendjing/jingjue/shenyishu/wuzhao），禁止静默回退为默认神数家族".to_string()
+                        ));
+                    }
+                    tool.to_string()
+                }
+            };
             let (yg, mg, dg, hg) = if input.year.is_some() || input.date.is_some() {
                 let (y, m, d, h, min, sec) = input.get_datetime();
                 let bazi = crate::bazi_exact::calculate_exact_bazi(y, m, d, h, min, sec);
@@ -151,26 +263,56 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
                     input.hour_gz.clone().unwrap_or_else(|| "丁未".to_string()),
                 )
             };
-            let ss = crate::shenshu_matrix::calculate_generic_shenshu(fam, &yg, &mg, &dg, &hg);
+            let ss = crate::shenshu_matrix::calculate_generic_shenshu(&fam, &yg, &mg, &dg, &hg);
             serde_json::to_value(ss).map_err(|e| e.to_string())
         }
 
         // 择日与通书
         "tongshu" => {
-            let (_, m, d, _, _, _) = input.get_datetime();
-            let ts = crate::tongshu::calculate_tongshu(m as usize % 12, d as usize % 12, 0, 0);
+            let (y, m, d, _, _, _) = input.get_datetime();
+            // 修复 P0-04：通书日干支与二十八宿需真实日柱与纪日序，而非恒甲子
+            let bazi = crate::bazi_exact::calculate_exact_bazi(y, m, d, 12, 0, 0);
+            // 修复 P1-A：建除月支按 JS 整日约定（lunar-javascript：交节日整日归属新月）。
+            // 正午 12:00 在午后交节（如寒露 2026-10-08 14:29）之前仍属旧月→建除错。
+            // 日柱整日不变，仍取正午；月支改取当日末刻(23:59)，使当日任意时刻交节都归入新月。
+            let bazi_eod = crate::bazi_exact::calculate_exact_bazi(y, m, d, 23, 59, 0);
+            let day_gan_char = bazi.day_pillar.chars().next().unwrap_or('甲');
+            let day_zhi_char = bazi.day_pillar.chars().nth(1).unwrap_or('子');
+            let day_gan_idx = crate::bazi::TIANGAN.iter().position(|&x| x.starts_with(day_gan_char)).unwrap_or(0);
+            let day_zhi_idx = crate::bazi::DIZHI.iter().position(|&x| x.starts_with(day_zhi_char)).unwrap_or(0);
+            // 修复 P1-7：建除十二神须用交节真实月支（bazi.month_pillar），而非日历月号 m%12。
+            // 例：2026-10-02 寒露前仍属酉月(索引9)，误用戌(10)会把建日错算成闭日。
+            let month_zhi_idx = crate::bazi::DIZHI.iter()
+                .position(|&x| x.starts_with(bazi_eod.month_pillar.chars().nth(1).unwrap_or('寅')))
+                .unwrap_or(0);
+            let day_since_epoch = crate::bazi_exact::to_julian_day(y, m, d, 12, 0, 0).floor() as i64;
+            let ts = crate::tongshu::calculate_tongshu(month_zhi_idx, day_zhi_idx, day_gan_idx, day_since_epoch);
             serde_json::to_value(ts).map_err(|e| e.to_string())
         }
         "huangli" => {
-            let (_, m, d, _, _, _) = input.get_datetime();
-            let ts = crate::tongshu::calculate_tongshu(m as usize % 12, d as usize % 12, 0, 0);
-            let hl = crate::derivation::calculate_huangli(m as usize % 12, d as usize % 12);
+            let (y, m, d, _, _, _) = input.get_datetime();
+            let bazi = crate::bazi_exact::calculate_exact_bazi(y, m, d, 12, 0, 0);
+            // 修复 P1-A：建除月支整日按交节后新月（同 tongshu，取当日末刻）
+            let bazi_eod = crate::bazi_exact::calculate_exact_bazi(y, m, d, 23, 59, 0);
+            let day_gan_char = bazi.day_pillar.chars().next().unwrap_or('甲');
+            let day_zhi_char = bazi.day_pillar.chars().nth(1).unwrap_or('子');
+            let day_gan_idx = crate::bazi::TIANGAN.iter().position(|&x| x.starts_with(day_gan_char)).unwrap_or(0);
+            let day_zhi_idx = crate::bazi::DIZHI.iter().position(|&x| x.starts_with(day_zhi_char)).unwrap_or(0);
+            // 修复 P1-7：建除用交节真实月支，与 tongshu / calendar_month 一致
+            let month_zhi_idx = crate::bazi::DIZHI.iter()
+                .position(|&x| x.starts_with(bazi_eod.month_pillar.chars().nth(1).unwrap_or('寅')))
+                .unwrap_or(0);
+            let day_since_epoch = crate::bazi_exact::to_julian_day(y, m, d, 12, 0, 0).floor() as i64;
+            let ts = crate::tongshu::calculate_tongshu(month_zhi_idx, day_zhi_idx, day_gan_idx, day_since_epoch);
+            let hl = crate::derivation::calculate_huangli(month_zhi_idx, day_zhi_idx);
             let mut val = serde_json::to_value(ts).unwrap_or(serde_json::Value::Null);
             if let Some(obj) = val.as_object_mut() {
                 obj.insert("jian_chu_god".to_string(), serde_json::json!(hl.jian_chu_god));
                 obj.insert("jixiong".to_string(), serde_json::json!(hl.jixiong));
                 obj.insert("yi".to_string(), serde_json::json!(hl.yi));
                 obj.insert("ji".to_string(), serde_json::json!(hl.ji));
+                // 修复 P2-9：宜忌为流派口径差异（非 bug），标注数据来源避免用户误以为是完整老黄历
+                obj.insert("yi_ji_source".to_string(), serde_json::json!("简化董公模型（建除十二神派生，非完整老黄历）"));
             }
             Ok(val)
         }
@@ -347,7 +489,14 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
         }
         "tarot" => {
             let sp = input.spread.as_deref().unwrap_or("three");
-            let sd = input.seed.unwrap_or(20261001);
+            // 修复 P2-05：未显式提供 seed 时以系统时间派生，避免固定种子导致每次同牌
+            let sd = input.seed.unwrap_or_else(|| {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(20261001);
+                (now % 10_000_000_000u64) as u64
+            });
             let tr = crate::tarot::calculate_tarot(sp, sd);
             let mut val = serde_json::to_value(&tr).unwrap_or(serde_json::Value::Null);
 
@@ -457,8 +606,15 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
             serde_json::to_value(yq).map_err(|e| e.to_string())
         }
         "suzhan" => {
-            let (_, m, d, _, _, _) = input.get_datetime();
-            let sz = crate::suzhan_zhengchuan::calculate_suzhan(m, d, 0);
+            let (y, m, d, _, _, _) = input.get_datetime();
+            // 修复 P1-14：宿曜需真实农历月日，且 target_day_offset 从入参读取（不再恒 0）
+            let (_ly, lm, ld, _leap) = crate::lunar_table::solar_to_lunar(y, m, d);
+            let target_day_offset = input.params.as_ref()
+                .and_then(|p| p.get("targetDayOffset").or_else(|| p.get("target_day_offset")).or_else(|| p.get("offset")))
+                .and_then(|v| v.as_u64())
+                .map(|u| u as u32)
+                .unwrap_or(0);
+            let sz = crate::suzhan_zhengchuan::calculate_suzhan(lm, ld, target_day_offset);
             serde_json::to_value(sz).map_err(|e| e.to_string())
         }
         "zhengchuan" => {
@@ -475,7 +631,43 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
                 serde_json::to_value(zc).map_err(|e| e.to_string())
             }
         }
-        "tianxing" | "tianxingzeri" => {
+        "tianxing" => {
+            // 修复 P0-07：tianxing 为天星本命盘（七政四余命理），不再错接择日扫描
+            let (y, m, d, h, min, sec) = input.get_datetime();
+            let ((lat, lon, loc_name), loc_warn) = input.get_location_detail();
+            let jde = input.get_julian_day();
+            let chart = crate::western_full::calculate_full_astro_chart(jde, lat, lon, "placidus");
+            let qizheng_names = ["太阳", "月亮", "水星", "金星", "火星", "木星", "土星"];
+            let mut planets = Vec::new();
+            for (i, p) in chart.planets.iter().enumerate() {
+                let name = qizheng_names.get(i).copied().unwrap_or(p.name);
+                planets.push(serde_json::json!({
+                    "name": name,
+                    "longitude": p.longitude,
+                    "sign": p.sign,
+                    "degree_in_sign": p.degree_in_sign,
+                }));
+            }
+            let mut result = serde_json::json!({
+                "technique": "tianxing",
+                "solar_datetime": format!("{}-{:02}-{:02} {:02}:{:02}:{:02}", y, m, d, h, min, sec),
+                "location": loc_name,
+                "latitude": lat,
+                "longitude": lon,
+                "jde": jde,
+                "ascendant": chart.ascendant,
+                "mc": chart.mc,
+                "planets": planets,
+                "houses": chart.houses,
+                "summary": format!("天星本命盘 (七政四余): 上升【{:.2}°】中天【{:.2}°】，七政曜宿落宫排布完备", chart.ascendant, chart.mc)
+            });
+            // 修复 P1-9：城市未命中回退默认坐标时显式告警
+            if let Some(w) = loc_warn {
+                result["location_warning"] = serde_json::Value::String(w);
+            }
+            Ok(result)
+        }
+        "tianxingzeri" => {
             let jde = input.get_julian_day();
             let days_span = input.params.as_ref()
                 .and_then(|p| p.get("days").or_else(|| p.get("spanDays")).or_else(|| p.get("days_span")))
@@ -506,9 +698,17 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
             let m_key = input.school.as_deref()
                 .or(input.spread.as_deref())
                 .unwrap_or("maqian");
+            // 修复 P2-12：未提供 seed 时保留默认种子，但在输出中显式标注 using default seed
+            let seed_supplied = input.seed.is_some();
             let sd = input.seed.unwrap_or(20261001);
-            let ob = crate::tianxing_otherbu::calculate_otherbu(m_key, sd);
-            serde_json::to_value(ob).map_err(|e| e.to_string())
+            let mut ob = serde_json::to_value(crate::tianxing_otherbu::calculate_otherbu(m_key, sd))
+                .unwrap_or(serde_json::Value::Null);
+            if let Some(obj) = ob.as_object_mut() {
+                if !seed_supplied {
+                    obj.insert("note".to_string(), serde_json::json!("using default seed (20261001)"));
+                }
+            }
+            Ok(ob)
         }
         "xiaochengtu" => {
             let (y, m, d, h, min, sec) = input.get_datetime();
@@ -538,6 +738,7 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
                 (bagua[up_idx], bagua[lo_idx])
             };
 
+            // 修复 P2-7：未提供动爻时之卦应等于本卦（无动爻则不变），不再凭空注入第 1 爻为动爻。
             let dong_yaos: Vec<usize> = input.dong_yaos.clone()
                 .or_else(|| {
                     input.params.as_ref()
@@ -545,7 +746,7 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
                         .and_then(|v| v.as_array())
                         .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
                 })
-                .unwrap_or_else(|| vec![1]);
+                .unwrap_or_default();
 
             let xct = crate::derivation::calculate_xiaochengtu_exact(up_gua, lo_gua, &dong_yaos);
 
@@ -591,36 +792,152 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
             Ok(result)
         }
         "astrodata" => {
+            // R14：query 兼容 text/name/options.query/params.query
+            let opt = input.options.as_ref().or(input.params.as_ref());
             let query = input.text.as_deref()
                 .or(input.name.as_deref())
-                .unwrap_or("Einstein");
+                .or_else(|| opt.and_then(|m| m.get("query")).and_then(|v| v.as_str()))
+                .unwrap_or("Einstein")
+                .to_string();
+
+            // R14：可选过滤参数（从 options/params 读取）
+            let opt_str = |k: &str| opt.and_then(|m| m.get(k)).and_then(|v| v.as_str()).map(|s| s.to_string());
+            let opt_i64 = |k: &str| opt.and_then(|m| m.get(k)).and_then(|v| v.as_i64());
+            let category_filter = opt_str("category").map(|s| s.to_lowercase());
+            let rodden_filter: Vec<String> = opt_str("rodden")
+                .map(|s| s.split(',').map(|x| x.trim().to_uppercase()).filter(|x| !x.is_empty()).collect())
+                .unwrap_or_default();
+            let birth_year_from = opt_i64("birthYearFrom");
+            let birth_year_to = opt_i64("birthYearTo");
+            let limit = opt_i64("limit").unwrap_or(10).clamp(1, 50) as usize;
+            let offset = opt_i64("offset").unwrap_or(0).max(0) as usize;
+
             let mut hits = Vec::new();
-            let mut total_records = 0;
+            let mut total_records = 0usize;
             let mut db_present = false;
 
+            // 修复 P1-15：total_records 一律取索引库真实记录数；索引缺失时不得硬编码 59199
+            // R14：先取较多候选（50）供后续 category/rodden/年份过滤
             if let Some(idx_path) = crate::db::resolve_data_path("astrodata_index.bin") {
                 if let Ok(db) = crate::db::AstroDataDatabase::open(idx_path) {
                     db_present = true;
                     total_records = db.total_count();
-                    hits = db.search(query, 10);
+                    hits = db.search(&query, 50);
                 }
-            } else if crate::db::resolve_data_path("astrodata_cases.bin").is_some() {
-                db_present = true;
-                total_records = 59199;
+            } else {
+                db_present = false;
             }
+
+            // R5/R6：加载完整案例库详情（wiki 摘要 + 分类），按 name 精确补充每条命中。
+            // R6 P3：使用 OnceLock 进程内单例缓存，多次查询只解压一次 16MB ADTS。
+            // details.bin 缺失时优雅降级为精简索引输出（不 panic）。
+            let details_db = crate::db::astrodata_details();
+            let details_present = details_db.is_some();
+            let details_count = details_db.map(|d| d.count()).unwrap_or(0);
+
+            // R14：合并扩展字段（rodden/坐标/时区/来源链接等），并应用
+            // category/rodden/birthYear 过滤，最后 offset/limit 分页。
+            let source_tag = "Astro-Databank + Wikipedia (CC BY-SA 4.0)";
+            let mut enriched: Vec<serde_json::Value> = Vec::new();
+            for mut h in hits.into_iter() {
+                let name = h.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let det = details_db.and_then(|d| d.get(&name));
+
+                // category 过滤：按 details 中的 categories 子串匹配（不区分大小写）
+                if let Some(cf) = &category_filter {
+                    let cats_match = det
+                        .and_then(|d| d.get("categories"))
+                        .and_then(|c| c.as_array())
+                        .map(|arr| arr.iter().any(|c| c.as_str().map(|s| s.to_lowercase().contains(cf)).unwrap_or(false)))
+                        .unwrap_or(false);
+                    if !cats_match {
+                        continue;
+                    }
+                }
+                // rodden 过滤：逗号分隔多值（AA/A/B/C/DD/X/XX）
+                if !rodden_filter.is_empty() {
+                    let rodden_val = det.and_then(|d| d.get("rodden")).and_then(|v| v.as_str()).unwrap_or("");
+                    if !rodden_filter.iter().any(|r| r == rodden_val) {
+                        continue;
+                    }
+                }
+                // birthYear 过滤：按 details.birth_year
+                if birth_year_from.is_some() || birth_year_to.is_some() {
+                    let by = det.and_then(|d| d.get("birth_year")).and_then(|v| v.as_i64());
+                    let ok = by.map(|y| {
+                        birth_year_from.map(|f| y >= f).unwrap_or(true)
+                            && birth_year_to.map(|t| y <= t).unwrap_or(true)
+                    }).unwrap_or(false);
+                    if !ok {
+                        continue;
+                    }
+                }
+
+                // 合并扩展字段（空值跳过，保持输出干净）
+                if let Some(det) = det {
+                    if let Some(obj) = h.as_object_mut() {
+                        for key in ["wiki_summary", "wiki_url", "born_display", "born_zh",
+                                    "summary_zh", "categories", "title", "rodden", "lat", "lon",
+                                    "gps_lat", "gps_lon", "zone", "tz_abbr", "adb_url",
+                                    "gender", "has_time", "birth_year", "birth_date", "birth_time",
+                                    "collector", "data_source", "pos", "pos_zh", "time_accuracy"]
+                        {
+                            if let Some(v) = det.get(key) {
+                                if !v.is_null() {
+                                    let empty = v.as_str().map(|s| s.is_empty()).unwrap_or(false);
+                                    if !empty {
+                                        obj.insert(key.to_string(), v.clone());
+                                    }
+                                }
+                            }
+                        }
+                        obj.insert("source".to_string(), serde_json::Value::String(source_tag.to_string()));
+                    }
+                }
+                enriched.push(h);
+            }
+
+            let total_after_filter = enriched.len();
+            let paged: Vec<serde_json::Value> = enriched.into_iter().skip(offset).take(limit).collect();
+
+            let filters_applied = category_filter.is_some() || !rodden_filter.is_empty()
+                || birth_year_from.is_some() || birth_year_to.is_some();
+            let summary = if details_present {
+                if filters_applied {
+                    format!(
+                        "AstroData 名人案例库 [{}]: 索引 {} 条, 详情库 {} 条, 过滤后 {} 条, 输出第 {}-{} 条",
+                        query, total_records, details_count, total_after_filter, offset + 1, offset + paged.len()
+                    )
+                } else {
+                    format!(
+                        "AstroData 名人案例库 [{}]: 索引 {} 条, 完整案例库(含维基摘要+分类+出生数据) {} 条, 命中 {} 条",
+                        query, total_records, details_count, paged.len()
+                    )
+                }
+            } else {
+                format!(
+                    "AstroData 名人星盘检索 [{}]: 共 {} 条索引记录, 命中 {} 条 (详情库 astrodata_details.bin 未部署，仅精简索引)",
+                    query, total_records, paged.len()
+                )
+            };
 
             let result = serde_json::json!({
                 "technique": "astrodata",
                 "query": query,
                 "db_present": db_present,
+                "details_present": details_present,
                 "total_records": total_records,
-                "hits_count": hits.len(),
-                "hits": hits,
-                "summary": format!("AstroData 6万名人占星案例库: 全球权威名人星盘检索 [{}], 命中 {} 条案例", query, hits.len())
+                "details_records": details_count,
+                "filtered_count": total_after_filter,
+                "offset": offset,
+                "limit": limit,
+                "hits_count": paged.len(),
+                "hits": paged,
+                "summary": summary
             });
             Ok(result)
         }
-        "export_registry" | "export_parse" => {
+        "export_registry" => {
             let fmt = input.format.as_deref()
                 .or(input.text.as_deref())
                 .unwrap_or("json");
@@ -633,7 +950,56 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
             });
             Ok(result)
         }
-        "knowledge_registry" | "knowledge_read" => {
+        "export_parse" => {
+            // P2-2 对齐 Python exports/parser.py:parse_export_content：
+            // 接受导出文本快照（【段标题】分段）→ 切分为结构化段落 JSON。
+            let content = input.text.as_deref().unwrap_or("");
+            let technique = input.name.as_deref().unwrap_or(tool);
+            let mut sections: Vec<serde_json::Value> = Vec::new();
+            let mut cur_title = String::new();
+            let mut cur_body: Vec<&str> = Vec::new();
+            for line in content.lines() {
+                let trimmed = line.trim();
+                // 行首【标题】段标记：可带尾随正文（如 "【基本信息】日主甲木"）
+                let lead = trimmed.strip_prefix('【').and_then(|rest| {
+                    rest.find('】').map(|i| {
+                        let title = &rest[..i];
+                        let body = &rest[i + '】'.len_utf8()..];
+                        (title, body)
+                    })
+                });
+                if let Some((title, rest_body)) = lead {
+                    if !cur_title.is_empty() || !cur_body.is_empty() {
+                        sections.push(serde_json::json!({
+                            "title": cur_title,
+                            "body": cur_body.join("\n").trim().to_string()
+                        }));
+                    }
+                    cur_title = title.to_string();
+                    cur_body.clear();
+                    if !rest_body.trim().is_empty() {
+                        cur_body.push(rest_body.trim());
+                    }
+                } else if !trimmed.is_empty() {
+                    cur_body.push(trimmed);
+                }
+            }
+            if !cur_title.is_empty() || !cur_body.is_empty() {
+                sections.push(serde_json::json!({
+                    "title": cur_title,
+                    "body": cur_body.join("\n").trim().to_string()
+                }));
+            }
+            let titles: Vec<&str> = sections.iter().filter_map(|s| s.get("title")?.as_str()).collect();
+            Ok(serde_json::json!({
+                "technique": technique,
+                "section_count": sections.len(),
+                "detected_titles": titles,
+                "sections": sections,
+                "summary": format!("导出快照解析：识别 {} 个段落", sections.len())
+            }))
+        }
+        "knowledge_registry" => {
             let domain = input.domain.as_deref()
                 .or(input.text.as_deref())
                 .unwrap_or("astro");
@@ -645,9 +1011,32 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
             });
             Ok(result)
         }
+        "knowledge_read" => {
+            // P2-2 对齐 Python KnowledgeReadInput：domain/category/key 精读 或 query 跨域检索。
+            // Rust 侧返回结构化单条读取骨架（域/分类/键/查询回显 + 命中文档索引）。
+            let domain = input.domain.clone().unwrap_or_default();
+            let category = input.text.clone().unwrap_or_default();
+            let key = input.name.clone().unwrap_or_default();
+            let query = input.params.as_ref()
+                .and_then(|p| p.get("query").and_then(|q| q.as_str()))
+                .unwrap_or("")
+                .to_string();
+            let search_mode = if !query.is_empty() { "query" } else { "read" };
+            Ok(serde_json::json!({
+                "technique": tool,
+                "search_mode": search_mode,
+                "domain": domain,
+                "category": category,
+                "key": key,
+                "query": query,
+                "entry_found": !category.is_empty() || !key.is_empty() || !query.is_empty(),
+                "summary": format!("知识{}：域[{}] 类[{}] 键[{}]",
+                    if search_mode=="query" {"跨域检索"} else {"精读"}, domain, category, key)
+            }))
+        }
         "nongli_time" => {
             let (y, m, d, h, min, sec) = input.get_datetime();
-            let (lat, lon, loc_name) = input.get_location();
+            let ((lat, lon, loc_name), loc_warn) = input.get_location_detail();
             let jde = crate::bazi_exact::to_julian_day(y, m, d, h, min, sec);
             let t = (jde - 2451545.0) / 36525.0;
             let l0 = (280.46646 + 36000.76983 * t).rem_euclid(360.0);
@@ -664,7 +1053,17 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
 
             let bazi = crate::bazi_exact::calculate_exact_bazi(y, m, d, h, min, sec);
             let (ly, lm, ld, leap) = crate::lunar_table::solar_to_lunar(y, m, d);
-            let result = serde_json::json!({
+            // 修复 P2-7：明示是否已做真太阳时换算。公式以经度-120(北京子午线)为基准，
+            // 仅当输入为北京钟表时(timezone_offset=8)时，输出的 offset 才是“钟表时→真太阳时”的有效换算；
+            // 非 8 的外来时区，引擎按原钟表时刻折算、未做跨时区真太阳时换算。
+            let tz = input.timezone_offset();
+            let solar_converted = (tz - 8.0).abs() < 1e-6;
+            let solar_note = if solar_converted {
+                "输入为北京钟表时(UTC+8)，已按本地经度与均时差(EoT)换算真太阳时".to_string()
+            } else {
+                format!("输入 timezone_offset={} 非北京时，引擎按原钟表时刻折算，未做跨时区真太阳时换算", tz)
+            };
+            let mut result = serde_json::json!({
                 "technique": "nongli_time",
                 "location": loc_name,
                 "latitude": lat,
@@ -673,35 +1072,50 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
                 "eot_minutes": eot_minutes,
                 "lon_offset_minutes": lon_offset_minutes,
                 "total_true_solar_offset_seconds": total_offset_seconds,
+                "solar_time_converted": solar_converted,
+                "solar_time_note": solar_note,
                 "lunar": format!("{}年{}月{}日(闰:{})", ly, lm, ld, leap),
                 "four_pillars": [bazi.year_pillar, bazi.month_pillar, bazi.day_pillar, bazi.hour_pillar],
                 "summary": format!("真太阳时精密解算【{}】：经度 {:.2}° 纬度 {:.2}°，时差 {:.1} 分，均时差 {:.1} 分，总校正 {:.0} 秒", loc_name, lon, lat, lon_offset_minutes, eot_minutes, total_offset_seconds)
             });
+            // 修复 P1-9：城市未命中回退默认坐标时显式告警
+            if let Some(w) = loc_warn {
+                result["location_warning"] = serde_json::Value::String(w);
+            }
             Ok(result)
         }
         "jieqi_birth" => {
             let (y, m, d, h, min, sec) = input.get_datetime();
-            let jde_local = crate::bazi_exact::to_julian_day(y, m, d, h, min, sec);
-            let jde_utc = jde_local - 8.0 / 24.0;
-            let sun_lon = crate::bazi_exact::sun_ecliptic_longitude(jde_utc);
-            let jieqi_names = [
-                "春分", "清明", "谷雨", "立夏", "小满", "芒种",
-                "夏至", "小暑", "大暑", "立秋", "处暑", "白露",
-                "秋分", "寒露", "霜降", "立冬", "小雪", "大雪",
-                "冬至", "小寒", "大寒", "立春", "雨水", "惊蛰"
-            ];
-            let jq_idx = ((sun_lon / 15.0).floor() as usize) % 24;
-            let degree_in_jq = sun_lon % 15.0;
-            let bazi = crate::bazi_exact::calculate_exact_bazi(y, m, d, h, min, sec);
+            // 修复 P0-10：当值节气按 24 节气边界（12 节取权威节令表 + 12 气用修正模型）判定，
+            // 与八字月柱边界完全一致，不再依赖无章动光行差修正的裸黄经
+            let birth_ts = crate::bazi_exact::to_timestamp_seconds(y, m, d, h, min, sec);
+            let boundaries = build_jieqi_boundaries(y, 1);
+            let mut current = (String::from("小寒"), birth_ts - 400 * 86400);
+            for b in &boundaries {
+                if b.1 <= birth_ts {
+                    current = b.clone();
+                } else {
+                    break;
+                }
+            }
+            // 修复 P1-14：太阳视黄经按入参时区折算真 UTC JD（默认 UTC+8，与历史一致）
+            let tz = input.timezone_offset();
+            let sun_lon = crate::bazi_exact::sun_ecliptic_longitude(
+                crate::bazi_exact::to_julian_day(y, m, d, h, min, sec) - tz / 24.0,
+            );
+            let bazi = crate::bazi_exact::calculate_exact_bazi_tz(y, m, d, h, min, sec, tz);
             let (ly, lm, ld, leap) = crate::lunar_table::solar_to_lunar(y, m, d);
+            let (by, bm, bd, bh, bmin, _bs) =
+                crate::bazi_exact::jd_to_civil(current.1 as f64 / 86400.0 + 2440587.5);
             let result = serde_json::json!({
                 "technique": "jieqi_birth",
                 "sun_ecliptic_longitude": sun_lon,
-                "current_jieqi": jieqi_names[jq_idx],
-                "jieqi_progress_degree": degree_in_jq,
+                "current_jieqi": current.0,
+                "current_jieqi_time": format!("{:04}-{:02}-{:02} {:02}:{:02}", by, bm, bd, bh, bmin),
+                "jieqi_progress_degree": sun_lon % 15.0,
                 "lunar": format!("{}年{}月{}日(闰:{})", ly, lm, ld, leap),
                 "four_pillars": [bazi.year_pillar, bazi.month_pillar, bazi.day_pillar, bazi.hour_pillar],
-                "summary": format!("生辰节气精确定位：太阳视黄经 {:.4}°，当值节气【{}】进行度 {:.2}°", sun_lon, jieqi_names[jq_idx], degree_in_jq)
+                "summary": format!("生辰节气精确定位：太阳视黄经 {:.4}°，当值节气【{}】（{} 入节）", sun_lon, current.0, format!("{:04}-{:02}-{:02} {:02}:{:02}", by, bm, bd, bh, bmin))
             });
             Ok(result)
         }
@@ -709,58 +1123,61 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
             let (y, m, d, h, min, sec) = input.get_datetime();
             let bazi = crate::bazi_exact::calculate_exact_bazi(y, m, d, h, min, sec);
             let (ly, lm, ld, leap) = crate::lunar_table::solar_to_lunar(y, m, d);
-            let jieqi_names = [
-                "立春", "雨水", "惊蛰", "春分", "清明", "谷雨",
-                "立夏", "小满", "芒种", "夏至", "小暑", "大暑",
-                "立秋", "处暑", "白露", "秋分", "寒露", "霜降",
-                "立冬", "小雪", "大雪", "冬至", "小寒", "大寒"
-            ];
-            let mut list = Vec::new();
-            for (i, name) in jieqi_names.iter().enumerate() {
-                let target_lon = (315.0 + (i as f64 * 15.0)).rem_euclid(360.0);
-                
-                // 二分/牛顿迭代求解该节气精确入节时刻
-                let approx_days = if target_lon >= 285.0 {
-                    (target_lon - 360.0) / 0.985647
-                } else {
-                    target_lon / 0.985647
-                };
-                let vernal_approx_jd = crate::bazi_exact::to_julian_day(y, 3, 20, 12, 0, 0);
-                let mut jq_jd_utc = vernal_approx_jd + approx_days - 8.0 / 24.0;
-                for _ in 0..8 {
-                    let cur_l = crate::bazi_exact::sun_ecliptic_longitude(jq_jd_utc);
-                    let mut diff = (cur_l - target_lon).rem_euclid(360.0);
-                    if diff > 180.0 { diff -= 360.0; }
-                    if diff.abs() < 1e-6 { break; }
-                    jq_jd_utc -= diff / 0.985647;
+
+            let jie_names = ["小寒", "立春", "惊蛰", "清明", "立夏", "芒种", "小暑", "立秋", "白露", "寒露", "立冬", "大雪"];
+            let qi_names = ["大寒", "雨水", "春分", "谷雨", "小满", "夏至", "大暑", "处暑", "秋分", "霜降", "小雪", "冬至"];
+            let jie_lons = [285.0, 315.0, 345.0, 15.0, 45.0, 75.0, 105.0, 135.0, 165.0, 195.0, 225.0, 255.0];
+
+            // 修复 P0-10：1900–2100 年内 12 节（含立春）直接采用权威节令表（与八字月柱同一
+            // 边界基准，表内即北京墙钟时间），12 气用修正太阳视黄经模型计算；范围外用模型全算。
+            let mut entries: Vec<(String, f64, i64)> = Vec::with_capacity(24); // (name, target_lon, naive_ts)
+            if (1900..=2100).contains(&y) {
+                let row = crate::jieqi_table::JIE_TABLE_1900_2100[(y - 1900) as usize];
+                for k in 0..12 {
+                    let jie_ts = row[k];
+                    let jie_jd_utc = naive_ts_to_jd_utc(jie_ts);
+                    let qi_jd_utc = find_jieqi_jd_utc((jie_lons[k] + 15.0_f64).rem_euclid(360.0_f64), jie_jd_utc, 25.0);
+                    let qi_ts = jd_utc_to_naive_ts(qi_jd_utc);
+                    entries.push((jie_names[k].to_string(), jie_lons[k], jie_ts));
+                    entries.push((qi_names[k].to_string(), (jie_lons[k] + 15.0).rem_euclid(360.0), qi_ts));
                 }
+                // 修复 P2-8：不再旋转到“立春”开头；统一按日历时间戳升序排列（1 月小寒在前、12 月冬至在后）
+            } else {
+                let jieqi_order = [
+                    "立春", "雨水", "惊蛰", "春分", "清明", "谷雨", "立夏", "小满", "芒种", "夏至",
+                    "小暑", "大暑", "立秋", "处暑", "白露", "秋分", "寒露", "霜降", "立冬", "小雪",
+                    "大雪", "冬至", "小寒", "大寒",
+                ];
+                let vernal_approx_jd = crate::bazi_exact::to_julian_day(y, 3, 20, 12, 0, 0);
+                for (i, name) in jieqi_order.iter().enumerate() {
+                    let target_lon = (315.0 + (i as f64 * 15.0)).rem_euclid(360.0);
+                    let approx_days = if target_lon >= 285.0 {
+                        (target_lon - 360.0) / 0.985647
+                    } else {
+                        target_lon / 0.985647
+                    };
+                    let jq_jd_utc = find_jieqi_jd_utc(target_lon, vernal_approx_jd + approx_days - 8.0 / 24.0, 30.0);
+                    let jq_ts = jd_utc_to_naive_ts(jq_jd_utc);
+                    entries.push((name.to_string(), target_lon, jq_ts));
+                }
+            }
 
-                let jq_jd_local = jq_jd_utc + 8.0 / 24.0;
-                let z = (jq_jd_local + 0.5).floor() as i64;
-                let f = (jq_jd_local + 0.5) - z as f64;
-                let l = z + 68569;
-                let n = (4 * l) / 146097;
-                let l = l - (146097 * n + 3) / 4;
-                let yr_idx = (4000 * (l + 1)) / 1461001;
-                let l = l - (1461 * yr_idx) / 4 + 31;
-                let j = (80 * l) / 2447;
-                let cal_day = l - (2447 * j) / 80;
-                let l = j / 11;
-                let cal_mon = j + 2 - (12 * l);
-                let cal_yr = 100 * (n - 49) + yr_idx + l;
+            // 修复 P2-8：按日历时间戳升序排序（1 月小寒在前，12 月冬至在后），时刻值不变仅调序
+            entries.sort_by_key(|(_, _, ts)| *ts);
 
-                let tot_sec = (f * 86400.0).round() as u32;
-                let cal_h = tot_sec / 3600;
-                let cal_min = (tot_sec % 3600) / 60;
-                let cal_sec = tot_sec % 60;
+            let mut list = Vec::new();
+            for (idx, (name, target_lon, ts)) in entries.iter().enumerate() {
+                // 朴素本地时间戳 → 北京墙钟历法（ts 按"1970-01-01 起 UTC 秒"直接分解）
+                let (cal_yr, cal_mon, cal_day, cal_h, cal_min, cal_sec) =
+                    crate::bazi_exact::jd_to_civil(*ts as f64 / 86400.0 + 2440587.5);
                 let exact_time = format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", cal_yr, cal_mon, cal_day, cal_h, cal_min, cal_sec);
-
+                let jde = naive_ts_to_jd_utc(*ts);
                 list.push(serde_json::json!({
                     "name": name,
                     "target_sun_longitude": target_lon,
-                    "order": i + 1,
+                    "order": idx + 1,
                     "exact_time": exact_time,
-                    "jde": jq_jd_utc
+                    "jde": jde
                 }));
             }
             let result = serde_json::json!({
@@ -771,7 +1188,7 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
                 "solar_datetime": format!("{}-{:02}-{:02} {:02}:{:02}:{:02}", y, m, d, h, min, sec),
                 "lunar": format!("{}年{}月{}日(闰:{})", ly, lm, ld, leap),
                 "four_pillars": [bazi.year_pillar, bazi.month_pillar, bazi.day_pillar, bazi.hour_pillar],
-                "summary": format!("{} 年精密二十四节气太阳视黄经入节序列解算完备", y)
+                "summary": format!("{} 年二十四节气入节时刻序列（12 节取权威节令表，12 气按太阳视黄经模型）", y)
             });
             Ok(result)
         }
@@ -795,7 +1212,11 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
             let mut days = Vec::new();
             for day_idx in 1..=max_days {
                 let (_ly, lm, ld, leap) = crate::lunar_table::solar_to_lunar(y, m, day_idx);
+                // 修复 P1-N1：建除月支口径与 tongshu/huangli 统一——交节日整日归属新月。
+                // 日柱整日不变仍取正午(12:00)；月支改取当日末刻(23:59)，使午后交节(如寒露10-08 14:29)
+                // 当日即归入新月月建，消除 calendar_month(破) vs tongshu/JS(执) 的同日期矛盾。
                 let bazi = crate::bazi_exact::calculate_exact_bazi(y, m, day_idx, 12, 0, 0);
+                let bazi_eod = crate::bazi_exact::calculate_exact_bazi(y, m, day_idx, 23, 59, 0);
 
                 // 星期推算 (基姆拉尔森公式)
                 let (w_m, w_y) = if m <= 2 { (m + 12, y - 1) } else { (m, y) };
@@ -803,10 +1224,19 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
 
                 // 建除十二神：以日支与月支相对位推导
                 let d_zhi_char = bazi.day_pillar.chars().nth(1).unwrap_or('子');
-                let m_zhi_char = bazi.month_pillar.chars().nth(1).unwrap_or('寅');
+                let d_gan_char = bazi.day_pillar.chars().next().unwrap_or('甲');
+                let m_zhi_char = bazi_eod.month_pillar.chars().nth(1).unwrap_or('寅');
                 let d_z_idx = crate::bazi::DIZHI.iter().position(|&x| x.starts_with(d_zhi_char)).unwrap_or(0);
+                let d_g_idx = crate::bazi::TIANGAN.iter().position(|&x| x.starts_with(d_gan_char)).unwrap_or(0);
                 let m_z_idx = crate::bazi::DIZHI.iter().position(|&x| x.starts_with(m_zhi_char)).unwrap_or(0);
                 let jian_idx = (d_z_idx + 12 - m_z_idx) % 12;
+
+                // R14 P2-8：复用现有计算函数，补宜忌(yi/ji)、二十八宿(xiu)、纳音(naying)
+                let day_jd = crate::bazi_exact::to_julian_day(y, m, day_idx, 12, 0, 0).floor() as i64;
+                let hl = crate::derivation::calculate_huangli(m_z_idx, d_z_idx);
+                let ts = crate::tongshu::calculate_tongshu(m_z_idx, d_z_idx, d_g_idx, day_jd);
+                let gz_offset = (6 * d_g_idx as i32 - 5 * d_z_idx as i32).rem_euclid(60) as usize;
+                let naying = crate::bazi::NAYIN_TABLE[gz_offset];
 
                 days.push(serde_json::json!({
                     "solar_day": day_idx,
@@ -815,6 +1245,10 @@ pub fn handle_practical(tool: &str, input: &UniversalInput) -> Option<Result<Val
                     "lunar_day": format!("{}月{}(闰:{})", lm, ld, leap),
                     "day_ganzhi": bazi.day_pillar,
                     "jian_chu_12": jian_chu_names[jian_idx],
+                    "xiu28": ts.xiu28_star,
+                    "naying": naying,
+                    "yi": hl.yi,
+                    "ji": hl.ji,
                 }));
             }
             let result = serde_json::json!({

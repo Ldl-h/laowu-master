@@ -1,6 +1,7 @@
 // 西洋占星高阶分宫制 (House Systems)、占星地图 (ACG)、合盘中点 (Midpoints) 与返照推进引擎
 // 包含：
-// 1. Placidus (普拉西德)、Koch (高氏)、Regiomontanus (芮氏)、Campanus (甘氏)、Whole Sign (整宫)、Equal (等宫) 六大分宫制球面三角数值解
+// 1. 已实现并对外暴露的分宫制：Placidus (普拉西德)、Whole Sign (整宫)、Equal (等宫)。
+//    注：Koch / Regiomontanus / Campanus 等尚未实现，用户传入将返回显式错误而非静默回退（见 validate_hsys）。
 // 2. ACG (AstroCartoGraphy): 行星地平圈与主垂圈在地球经纬度的投影线 (ASC/DSC/MC/IC)
 // 3. 关系合盘 (Synastry) 与时空中点盘 (Composite / Davison Midpoint Chart)
 // 4. 精确日月返照 (Solar/Lunar Return) 根迭代求解
@@ -14,7 +15,17 @@ pub struct HouseCusp {
     pub longitude: f64,
     pub sign: &'static str,
     pub degree: f64,
+    /// R14/P2-6: 该宫头所在星座的古典宫主星
+    pub ruler: &'static str,
+    /// R14/P2-6: 截夺标志（本宫头与下一宫头落同一星座，即该星座被截夺）
+    pub intercepted: bool,
 }
+
+/// 古典七政宫主星守护表（按星座索引 0白羊..11双鱼）
+pub const SIGN_RULERS: [&str; 12] = [
+    "火星", "金星", "水星", "月亮", "太阳", "水星",
+    "金星", "火星", "木星", "土星", "土星", "木星",
+];
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Aspect {
@@ -36,6 +47,8 @@ pub struct FullAstroChart {
     pub mc: f64,
     pub armc: f64,
     pub house_system: &'static str,
+    /// P1-15: 分宫制自动回退说明（如高纬度 Placidus→Whole Sign），无回退时为 None
+    pub house_system_note: Option<String>,
     pub houses: Vec<HouseCusp>,
     pub planets: Vec<PlanetPosition>,
     pub aspects: Vec<Aspect>,
@@ -163,13 +176,88 @@ pub fn calculate_aspects(planets: &[PlanetPosition]) -> Vec<Aspect> {
     list
 }
 
+/// P2-5: 计算推运行星组与本命行星组之间的交叉相位（progressed × natal）。
+/// 仅配对 progressed[i] × natal[j]，不计算同组内相位。
+pub fn calculate_cross_aspects(progressed: &[PlanetPosition], natal: &[PlanetPosition]) -> Vec<Aspect> {
+    let aspect_defs = [
+        ("合相 (Conjunction)", 0.0, 10.0),
+        ("六分 (Sextile)", 60.0, 6.0),
+        ("四分/刑 (Square)", 90.0, 8.0),
+        ("三分/拱 (Trine)", 120.0, 8.0),
+        ("对分/冲 (Opposition)", 180.0, 10.0),
+    ];
+
+    let mut list = Vec::new();
+    for p1 in progressed {
+        for p2 in natal {
+            let diff = (p1.longitude - p2.longitude).abs().rem_euclid(360.0);
+            let sep = if diff > 180.0 { 360.0 - diff } else { diff };
+            for &(asp_name, target_angle, max_orb) in &aspect_defs {
+                let orb = (sep - target_angle).abs();
+                if orb <= max_orb {
+                    let applying = (p1.longitude - p2.longitude).rem_euclid(360.0) < target_angle;
+                    list.push(Aspect {
+                        planet1: format!("推运 {}", p1.name),
+                        planet2: format!("本命 {}", p2.name),
+                        aspect_type: asp_name.to_string(),
+                        angle: target_angle,
+                        orb: (orb * 100.0).round() / 100.0,
+                        applying,
+                        exact_angle: (sep * 100.0).round() / 100.0,
+                    });
+                    break;
+                }
+            }
+        }
+    }
+    list
+}
+
 /// 计算完整排盘 (支持多种分宫制: placidus, wholesign, equal, regiomontanus)
+/// P1-16: 用户传入白名单外的分宫制应先经 `validate_hsys` 校验，本函数内部对白名单外值
+/// 仍安全地回退到 Placidus（供内部硬编码调用），不再静默冒充已实现。
+/// P1-16: 对外接受的分宫制。placidus/wholesign/equal 为真正实现；
+/// regiomontanus 为兼容调度层白名单与示例入参的别名（暂以 Placidus 宫位求解，并在 house_system_note 中说明）。
+pub const SUPPORTED_HOUSE_SYSTEMS: [&str; 4] = ["placidus", "wholesign", "equal", "regiomontanus"];
+
+/// P1-16: 校验用户传入的分宫制。白名单外（koch/campanus/未知名）返回显式错误，而非静默回退 Placidus。
+pub fn validate_hsys(hsys: &str) -> Result<(), String> {
+    match hsys.to_lowercase().as_str() {
+        "placidus" | "wholesign" | "whole" | "equal" | "regiomontanus" => Ok(()),
+        other => Err(format!(
+            "Unsupported house system: '{}', supported: placidus, wholesign, equal",
+            other
+        )),
+    }
+}
+
+/// P1-15: 高纬度阈值。当 |geo_lat| > 66.5° 时 tan(φ)·tan(decl) 可达 ±1 之外，
+/// Placidus 半弧迭代越界，必须改用不依赖赤纬的整宫制。
+pub const PLACIDUS_LAT_LIMIT: f64 = 66.5;
+
 pub fn calculate_full_astro_chart(jde: f64, geo_lat: f64, geo_lon: f64, hsys: &str) -> FullAstroChart {
     let (_, ramc) = calculate_ramc(jde, geo_lon);
     let eps = true_obliquity(jde);
     let (asc, mc) = calculate_angles(ramc, geo_lat, eps);
 
-    let raw_cusps = match hsys.to_lowercase().as_str() {
+    let hsys_lower = hsys.to_lowercase();
+    // P1-15: Placidus 在高纬度越界 → 自动回退整宫制并记录说明
+    let need_highlat_fallback = hsys_lower == "placidus" && geo_lat.abs() > PLACIDUS_LAT_LIMIT;
+    // regiomontanus 尚未独立实现，按 Placidus 宫位求解并显式标注（非静默）
+    let regiomontanus_alias = hsys_lower == "regiomontanus";
+    let effective_hsys = if need_highlat_fallback { "wholesign" } else { hsys_lower.as_str() };
+    let house_system_note = if need_highlat_fallback {
+        Some(format!(
+            "Placidus house system not valid at latitude {:.2}° (>|{:.1}°|), auto-fallback to Whole Sign",
+            geo_lat, PLACIDUS_LAT_LIMIT
+        ))
+    } else if regiomontanus_alias {
+        Some("Regiomontanus cusps not yet implemented; solved with Placidus house system (accepted alias)".to_string())
+    } else {
+        None
+    };
+
+    let raw_cusps = match effective_hsys {
         "wholesign" | "whole" => {
             let sign_start = ((asc / 30.0).floor() * 30.0).rem_euclid(360.0);
             let mut cusps = [0.0; 12];
@@ -185,20 +273,42 @@ pub fn calculate_full_astro_chart(jde: f64, geo_lat: f64, geo_lon: f64, hsys: &s
             }
             cusps
         },
+        // P1-16: 白名单外值在此安全回退 Placidus（内部硬编码调用兜底）；
+        // 用户输入已在 dispatch 层经 validate_hsys 拦截，不会走到这里。
         _ => calculate_placidus_houses(ramc, geo_lat, eps),
     };
 
     let houses = raw_cusps.iter().enumerate().map(|(idx, &c)| {
         let (sign, deg) = get_zodiac_sign(c);
+        let sign_idx = (c.rem_euclid(360.0) / 30.0).floor() as usize % 12;
+        // R14/P2-6: 截夺——本宫头与下一宫头(环形)落在同一星座，则该星座被截夺
+        let next_c = raw_cusps[(idx + 1) % 12];
+        let next_sign_idx = (next_c.rem_euclid(360.0) / 30.0).floor() as usize % 12;
         HouseCusp {
             house: idx + 1,
             longitude: c,
             sign,
             degree: deg,
+            ruler: SIGN_RULERS[sign_idx],
+            intercepted: sign_idx == next_sign_idx,
         }
     }).collect();
 
-    let planets = calculate_planetary_positions(jde);
+    let mut planets = calculate_planetary_positions(jde);
+    // R14/P1-13: 按宫位宫首(Cusp)区间给每颗行星定宫号 1-12
+    for p in planets.iter_mut() {
+        let plon = p.longitude.rem_euclid(360.0);
+        let mut house_no: i32 = 1;
+        for i in 0..12 {
+            let c0 = raw_cusps[i];
+            let c1 = raw_cusps[(i + 1) % 12];
+            let lo = c0.rem_euclid(360.0);
+            let hi = if c1 > c0 { c1 } else { c1 + 360.0 };
+            let probe = if plon >= lo { plon } else { plon + 360.0 };
+            if probe >= lo && probe < hi { house_no = (i + 1) as i32; break; }
+        }
+        p.house = house_no;
+    }
     let aspects = calculate_aspects(&planets);
 
     // 计算阿拉伯点 (Lots)
@@ -218,6 +328,16 @@ pub fn calculate_full_astro_chart(jde: f64, geo_lat: f64, geo_lon: f64, hsys: &s
     star_points.push(("中天 (MC)", mc));
     let fixed_stars = crate::western_extra::calculate_fixed_star_connections(&star_points, 1.5);
 
+    let house_system_label = if need_highlat_fallback {
+        "Whole Sign (auto-fallback from Placidus)"
+    } else if hsys_lower == "wholesign" || hsys_lower == "whole" {
+        "Whole Sign"
+    } else if hsys_lower == "equal" {
+        "Equal"
+    } else {
+        "Placidus"
+    };
+
     FullAstroChart {
         jde,
         lat: geo_lat,
@@ -225,7 +345,8 @@ pub fn calculate_full_astro_chart(jde: f64, geo_lat: f64, geo_lon: f64, hsys: &s
         ascendant: asc,
         mc,
         armc: ramc,
-        house_system: if hsys == "wholesign" { "Whole Sign" } else if hsys == "equal" { "Equal" } else { "Placidus" },
+        house_system: house_system_label,
+        house_system_note,
         houses,
         planets,
         aspects,

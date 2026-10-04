@@ -101,6 +101,7 @@ pub fn get_ziwei_pos(day: u32, ju: u32) -> usize {
     }
 }
 
+#[allow(dead_code)] // P2-13: 地支字符串转索引，当前无外部调用
 pub fn zhi_index(z: &str) -> usize {
     ZHI.iter().position(|&item| item == z).unwrap_or(0)
 }

@@ -17,6 +17,11 @@ pub struct UnifiedToolOutput {
 }
 
 /// 格式化八字排盘快照文本
+///
+/// 注意（P2-R10 评估）：本函数仅供 `--snapshot` CLI 演示路径调用（main.rs bazi --snapshot），
+/// 不参与 `--tool` JSON 主链路。其中「纳音 / 三元上元一白 / 神煞 / 大运辛巳 / 流年2026丙午偏财」
+/// 等行是**写死的快照演示文案，并非按当次 bazi 计算得出**，仅用于排版样张展示。
+/// 主链路排盘结果请以 `--tool bazi` 返回的结构化 JSON 为准。保留此函数作为快照样张，不删代码。
 pub fn format_bazi_snapshot(bazi: &ExactBaZi, date_str: &str, time_str: &str, gender: &str) -> String {
     let mut out = String::new();
     out.push_str("[起盘信息]\n");

@@ -3,10 +3,11 @@
 pub const ZHI: [&str; 12] = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"];
 pub const GAN: [&str; 10] = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"];
 
-// 十二将神（天盘加地分所得）
+// 十二将神（传统序：0=登明亥,1=河魁戌,2=从魁酉,3=传送申,4=小吉未,5=胜光午,
+//                   6=太乙巳,7=天罡辰,8=太冲卯,9=功曹寅,10=大吉丑,11=神后子）
 pub const JIANG_SHEN: [&str; 12] = [
-    "神后 (子水)", "大吉 (丑土)", "功曹 (寅木)", "太冲 (卯木)", "天罡 (辰土)", "太乙 (巳火)",
-    "胜光 (午火)", "小吉 (未土)", "传送 (申金)", "从魁 (酉金)", "河魁 (戌土)", "登明 (亥水)"
+    "登明 (亥水)", "河魁 (戌土)", "从魁 (酉金)", "传送 (申金)", "小吉 (未土)", "胜光 (午火)",
+    "太乙 (巳火)", "天罡 (辰土)", "太冲 (卯木)", "功曹 (寅木)", "大吉 (丑土)", "神后 (子水)"
 ];
 
 // 十二贵神（天乙顺逆排布所得）
@@ -87,11 +88,15 @@ pub fn calculate_jinkou(
     let di_elem = elem_of_zhi(di);
 
     // 2. 将神 (月将加时排天盘，取落于地分之神)
-    // jiang = (地分 + 月将 - 占时) % 12
-    let jiang_idx = ((di_idx as i32 + yue_jiang_zhi as i32 - hour_zhi_idx as i32).rem_euclid(12)) as usize;
+    // yue_jiang_zhi 为传统十二月将序(0=登明亥)，先转为地支ZHI索引
+    let yj_zhi_pos = crate::liureng::yue_jiang_to_zhi(yue_jiang_zhi);
+    // jiang = (地分 + 月将地支位 - 占时) % 12
+    let jiang_idx = ((di_idx as i32 + yj_zhi_pos as i32 - hour_zhi_idx as i32).rem_euclid(12)) as usize;
     let jiang_zhi = ZHI[jiang_idx];
     let jiang_elem = elem_of_zhi(jiang_zhi);
-    let jiang_name = JIANG_SHEN[jiang_idx];
+    // jiang_idx 是ZHI索引(0=子)，需转回传统序索引查JIANG_SHEN
+    let jiang_trad_idx = (11 - jiang_idx) % 12;
+    let jiang_name = JIANG_SHEN[jiang_trad_idx];
 
     // 3. 贵神 (起例默认六壬法，甲戊庚丑未...)
     let day_gan_idx = match day_gan_char {

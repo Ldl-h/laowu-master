@@ -40,6 +40,7 @@ mod balbillus;
 mod germany;
 mod babylon;
 mod hellen;
+mod planetaryages;
 mod tongshu;
 mod mundane;
 mod tianxing_otherbu;
@@ -76,7 +77,25 @@ fn main() {
             buf
         };
 
-        let input: dispatcher::UniversalInput = serde_json::from_str(&input_str).unwrap_or_default();
+        // 修复 P0-R2：禁止 serde_json::from_str(...).unwrap_or_default() 吞掉反序列化错误。
+        // 类型不匹配 / 非法枚举值（如 gender=3、timezone_offset="abc"）此前会被静默丢成默认输入，
+        // 现改为显式结构化错误，包含 serde 给出的具体位置与原因。
+        let input: dispatcher::UniversalInput = match serde_json::from_str(&input_str) {
+            Ok(v) => v,
+            Err(e) => {
+                let out = serde_json::json!({
+                    "ok": false,
+                    "tool": tool_name,
+                    "error": {
+                        "code": "input.parse_failed",
+                        "message": format!("输入 JSON 反序列化失败: {}", e)
+                    },
+                    "data": null
+                });
+                println!("{}", serde_json::to_string(&out).unwrap());
+                return;
+            }
+        };
         let res = dispatcher::dispatch_tool(tool_name, input);
         println!("{}", serde_json::to_string(&res).unwrap());
         return;

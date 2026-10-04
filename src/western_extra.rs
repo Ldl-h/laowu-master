@@ -106,6 +106,50 @@ pub struct FixedStarConnection {
     pub vmag: f64,
     pub spectral: String,
     pub meaning: String,
+    /// P2-3: BSC/HR 编号对应的传统星名（毕宿五/轩辕十四/北河三/角宿一/心宿二/大角星等）
+    pub star_traditional_name: Option<String>,
+}
+
+/// P2-3: BSC/HR (耶鲁亮星星表 Harvard Revised 编号) → 传统星名映射表。
+/// BSC5 数据库中 hr 字段仅存 HR 数字编号，占星解读需要传统星名。
+pub const HR_TRADITIONAL_NAMES: [(&str, &str); 25] = [
+    ("472", "水委一 (Achernar)"),
+    ("93", "大陵五 (Algol)"),
+    ("1182", "五车五 (Elnath)"),
+    ("1457", "毕宿五 (Aldebaran)"),
+    ("1713", "参宿七 (Rigel)"),
+    ("1790", "参宿五 (Bellatrix)"),
+    ("1949", "参宿一 (Alnilam)"),
+    ("2061", "参宿四 (Betelgeuse)"),
+    ("2326", "老人星 (Canopus)"),
+    ("2491", "天狼星 (Sirius)"),
+    ("2893", "北河二 (Castor)"),
+    ("2943", "五车二 (Capella)"),
+    ("2950", "南河三 (Procyon)"),
+    ("2990", "北河三 (Pollux)"),
+    ("3737", "星宿一 (Alphard)"),
+    ("3982", "轩辕十四 (Regulus)"),
+    ("5056", "角宿一 (Spica)"),
+    ("5267", "马腹一 (Hadar)"),
+    ("5340", "大角星 (Arcturus)"),
+    ("5459", "南门二 (Rigil Kentaurus)"),
+    ("6134", "心宿二 (Antares)"),
+    ("7001", "织女一 (Vega)"),
+    ("7557", "河鼓二 (Altair)"),
+    ("7924", "天津四 (Deneb)"),
+    ("8728", "北落师门 (Fomalhaut)"),
+];
+
+/// 由 BSC/HR 编号字符串反查传统星名。hr 可能形如 "1457" 或 "HR 1457"。
+pub fn traditional_star_name(hr: &str) -> Option<&'static str> {
+    let digits: String = hr.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    HR_TRADITIONAL_NAMES
+        .iter()
+        .find(|(num, _)| *num == digits.as_str())
+        .map(|(_, name)| *name)
 }
 
 /// 计算各虚点与关键行星对耶鲁高精亮星的紧密合相 (容许度默认 1.5° 以内)
@@ -129,12 +173,24 @@ pub fn calculate_fixed_star_connections(points: &[(&str, f64)], orb_deg: f64) ->
             connections.push(FixedStarConnection {
                 point_name: p_name.to_string(),
                 point_lon: p_lon,
-                star_name: s.hr,
+                star_name: s.hr.clone(),
                 star_lon: s.ecl_lon,
                 orb: angular_orb,
                 vmag: s.vmag,
                 spectral: s.spectral_cls,
                 meaning: meaning.to_string(),
+                // P2-3: 优先按 HR 编号查传统星名；若 hr 本身已是带中文名/括号名（内置回退恒星表）则直接采用
+                star_traditional_name: traditional_star_name(&s.hr)
+                    .map(|x| x.to_string())
+                    .or_else(|| {
+                        let h = s.hr.as_str();
+                        let has_cjk = h.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+                        if has_cjk || h.contains('(') {
+                            Some(h.to_string())
+                        } else {
+                            None
+                        }
+                    }),
             });
         }
     }

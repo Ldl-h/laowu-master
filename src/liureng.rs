@@ -4,11 +4,18 @@
 pub const ZHI: [&str; 12] = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"];
 pub const GAN: [&str; 10] = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"];
 
-// 十二月将（太阳所在黄道宫位）
+// 十二月将（传统序：0=登明亥,1=河魁戌,2=从魁酉,3=传送申,4=小吉未,5=胜光午,
+//                   6=太乙巳,7=天罡辰,8=太冲卯,9=功曹寅,10=大吉丑,11=神后子）
 pub const YUE_JIANG: [&str; 12] = [
-    "神后 (子)", "大吉 (丑)", "功曹 (寅)", "太冲 (卯)", "天罡 (辰)", "太乙 (巳)",
-    "胜光 (午)", "小吉 (未)", "传送 (申)", "从魁 (酉)", "河魁 (戌)", "登明 (亥)"
+    "登明 (亥)", "河魁 (戌)", "从魁 (酉)", "传送 (申)", "小吉 (未)", "胜光 (午)",
+    "太乙 (巳)", "天罡 (辰)", "太冲 (卯)", "功曹 (寅)", "大吉 (丑)", "神后 (子)"
 ];
+
+/// 传统月将索引(0=登明亥)转为地支ZHI索引(0=子)
+/// 传统序与地支序反向映射：traditional=0(亥)→zhi=11, traditional=6(巳)→zhi=5
+pub fn yue_jiang_to_zhi(yj: usize) -> usize {
+    (11 - yj) % 12
+}
 
 // 十二贵人天将
 pub const TIAN_JIANG: [&str; 12] = [
@@ -138,8 +145,10 @@ pub fn calculate_liureng(
     day_gan_char: char,
     day_zhi_idx: usize,
 ) -> LiuRengResult {
-    // 1. 月将加时排天盘: 天盘[地盘位 di] = (di + yue_jiang - zhan_shi) % 12
-    let shift = ((yue_jiang_zhi as i32 - zhan_shi_zhi as i32).rem_euclid(12)) as usize;
+    // 1. 月将加时排天盘: 天盘[地盘位 di] = (di + yue_jiang_zhi_pos - zhan_shi) % 12
+    // yue_jiang_zhi 为传统十二月将序(0=登明亥)，需先转为地支ZHI索引
+    let yj_zhi_pos = yue_jiang_to_zhi(yue_jiang_zhi);
+    let shift = ((yj_zhi_pos as i32 - zhan_shi_zhi as i32).rem_euclid(12)) as usize;
     let mut tian_pan_map = [&""; 12];
     let mut di_pan_map = [&""; 12]; // 天盘支在哪个地盘上: di_pan_map[tian] = di
     let mut tian_pan = Vec::with_capacity(12);

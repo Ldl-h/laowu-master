@@ -17,7 +17,12 @@ pub fn handle_eastern(tool: &str, input: &UniversalInput) -> Option<Result<Value
                 .unwrap_or(true);
             let g = input.gender.unwrap_or(1) as u8;
             let bazi = crate::bazi::calculate_bazi_full(y, m, d, h, min, sec, g, after23, late_zi);
-            let exact = crate::bazi_exact::calculate_exact_bazi_with_switches(y, m, d, h, min, sec, after23, late_zi);
+            // R5-01: 接入 timezone_offset，默认8.0（北京时间）保持向后兼容
+            let tz_off = input.timezone_offset();
+            let exact = crate::bazi_exact::calculate_exact_bazi_with_switches_tz(y, m, d, h, min, sec, after23, late_zi, tz_off);
+            // R4-02: 明示时区折算状态——四柱锚定北京墙钟(UTC+8)，tz仅影响sun_lon天文输出
+            let tz_explicit = input.timezone_offset.is_some();
+            let solar_time_converted = !tz_explicit || (tz_off - 8.0).abs() < 0.01;
             match serde_json::to_value(&bazi) {
                 Ok(mut val) => {
                     val["gender"] = serde_json::json!(if g == 1 { "乾造 (男)" } else { "坤造 (女)" });
@@ -29,6 +34,11 @@ pub fn handle_eastern(tool: &str, input: &UniversalInput) -> Option<Result<Value
                     val["four_pillars"] = serde_json::json!([
                         exact.year_pillar, exact.month_pillar, exact.day_pillar, exact.hour_pillar
                     ]);
+                    // R4-02: 时区折算状态明示
+                    val["solar_time_converted"] = serde_json::json!(solar_time_converted);
+                    if !solar_time_converted {
+                        val["tz_note"] = serde_json::json!("四柱按中国标准时间（UTC+8）排盘，timezone_offset 仅用于太阳黄经（sun_lon）天文折算，未按当地时区折算日柱/时柱");
+                    }
                     Ok(val)
                 }
                 Err(e) => Err(e.to_string()),
@@ -87,7 +97,12 @@ pub fn handle_eastern(tool: &str, input: &UniversalInput) -> Option<Result<Value
                 (lm, ld)
             };
 
-            let bazi = crate::bazi_exact::calculate_exact_bazi(y, m, d, h, 0, 0);
+            let bazi = {
+                // 修复 P1-13：紫微时辰边界与八字共用同一组 after23/晚子开关（不再静默忽略入参）
+                let after23 = input.after23_new_day.unwrap_or(true);
+                let late_zi = input.late_zi_use_next_day.unwrap_or(true);
+                crate::bazi_exact::calculate_exact_bazi_with_switches(y, m, d, h, 0, 0, after23, late_zi)
+            };
             let y_gan_char = bazi.year_pillar.chars().next().unwrap_or('甲');
             let y_zhi_char = bazi.year_pillar.chars().nth(1).unwrap_or('子');
             let h_zhi_char = bazi.hour_pillar.chars().nth(1).unwrap_or('子');
@@ -123,7 +138,20 @@ pub fn handle_eastern(tool: &str, input: &UniversalInput) -> Option<Result<Value
                     y, m, d, h, min, sec,
                     day_gan_idx, hour_zhi_idx, day_zhi_idx, time_gan_idx
                 );
-                serde_json::to_value(qm).map_err(|e| e.to_string())
+                // P2-2: 明示时区折算状态（与bazi R4-02同款逻辑）
+                let tz_explicit = input.timezone_offset.is_some();
+                let tz_off = input.timezone_offset();
+                let solar_time_converted = !tz_explicit || (tz_off - 8.0).abs() < 0.01;
+                match serde_json::to_value(&qm) {
+                    Ok(mut val) => {
+                        val["solar_time_converted"] = serde_json::json!(solar_time_converted);
+                        if !solar_time_converted {
+                            val["tz_note"] = serde_json::json!("按中国标准时间（UTC+8）排盘，timezone_offset 仅用于太阳黄经（sun_lon）天文折算");
+                        }
+                        Ok(val)
+                    }
+                    Err(e) => Err(e.to_string()),
+                }
             }
         }
 
@@ -142,7 +170,8 @@ pub fn handle_eastern(tool: &str, input: &UniversalInput) -> Option<Result<Value
             let (_, _, _, h, _, _) = input.get_datetime();
             let day_gan = input.day_gan.as_deref().and_then(|s| s.chars().next()).unwrap_or('甲');
             let hour_zhi = input.hour_zhi.unwrap_or(h as usize % 12);
-            let yue_jiang = input.yue_jiang.unwrap_or(8);
+            // R5-03: 默认月将改为3（传统序=传送/申），与旧序idx=8语义一致
+            let yue_jiang = input.yue_jiang.unwrap_or(3);
             let di_fen = input.di_fen.unwrap_or(2);
             let jk = crate::jinkou::calculate_jinkou(day_gan, hour_zhi, yue_jiang, di_fen, true);
             serde_json::to_value(jk).map_err(|e| e.to_string())
@@ -151,8 +180,16 @@ pub fn handle_eastern(tool: &str, input: &UniversalInput) -> Option<Result<Value
         // 大六壬正宗
         "liureng" | "liureng_gods" => {
             let (_, _, _, h, _, _) = input.get_datetime();
-            let yue_jiang = input.yue_jiang.unwrap_or(8);
-            let zhan_shi = input.zhan_shi.unwrap_or(if input.hour.is_some() { h as usize % 12 } else { 6 });
+            // R5-03: 默认月将改为3（传统序=传送/申），与旧序idx=8语义一致
+            let yue_jiang = input.yue_jiang.unwrap_or(3);
+            // 修复 P1：占时辰支按 子(23-1)/丑(1-3)… 正确映射，不再用 h%12（23 点会错成亥）
+            let zhan_shi = input.zhan_shi.unwrap_or_else(|| {
+                if input.hour.is_some() || input.time.is_some() {
+                    (((h + 1) / 2) % 12) as usize
+                } else {
+                    6
+                }
+            });
             let day_gan = input.day_gan.as_deref().and_then(|s| s.chars().next()).unwrap_or('甲');
             let day_zhi = input.day_zhi.unwrap_or(0);
             let lr = crate::liureng::calculate_liureng(yue_jiang, zhan_shi, day_gan, day_zhi);
@@ -161,7 +198,16 @@ pub fn handle_eastern(tool: &str, input: &UniversalInput) -> Option<Result<Value
         "liureng_runyear" => {
             let age = input.age.unwrap_or(30.0) as u32;
             let gender = input.gender.unwrap_or(1);
-            let ext = crate::liureng_ext::calculate_liureng_runyear(0, age, gender == 1, &[]);
+            // 行年从命主出生年支起，男顺女逆
+            let birth_zhi_idx = if let Some(ref date_str) = input.date {
+                if let Some((y, m, d)) = crate::dispatcher::parse_date_str(date_str) {
+                    crate::bazi_exact::calculate_exact_bazi(y, m, d, 12, 0, 0)
+                        .year_pillar.chars().nth(1)
+                        .and_then(|c| crate::ziwei::ZHI.iter().position(|&x| x.starts_with(c)))
+                        .unwrap_or(0) as usize
+                } else { 0 }
+            } else { 0 };
+            let ext = crate::liureng_ext::calculate_liureng_runyear(birth_zhi_idx, age, gender == 1);
             serde_json::to_value(ext).map_err(|e| e.to_string())
         }
 

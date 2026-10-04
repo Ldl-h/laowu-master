@@ -29,12 +29,15 @@ if hasattr(sys.stdout, "reconfigure"):
 # 引入 110 项专属技法规范定义
 from techniques_110_custom_spec import TECHNIQUES_110_CUSTOM_SPEC as TECHNIQUES_110
 
+# 项目根目录定位 (用于子进程 cwd，确保 data/ 二进制库正常载入)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
 # 二进制执行档路径定位
-EXE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "target", "release", "xuanxue-core.exe"))
+EXE_PATH = os.path.abspath(os.path.join(PROJECT_ROOT, "target", "release", "xuanxue-core.exe"))
 if not os.path.exists(EXE_PATH):
-    EXE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "xuanxue-core.exe"))
+    EXE_PATH = os.path.abspath(os.path.join(PROJECT_ROOT, "target", "debug", "xuanxue-core.exe"))
 if not os.path.exists(EXE_PATH):
-    EXE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "target", "debug", "xuanxue-core.exe"))
+    EXE_PATH = os.path.abspath(os.path.join(PROJECT_ROOT, "xuanxue-core.exe"))
 
 
 class TechniqueTestRunner:
@@ -54,6 +57,7 @@ class TechniqueTestRunner:
         async with self.semaphore:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
+                cwd=PROJECT_ROOT,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )

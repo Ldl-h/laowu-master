@@ -308,10 +308,15 @@ pub fn calculate_qimen(month: u32, day_gan_idx: usize, hour_zhi_idx: usize) -> Q
     calculate_qimen_advanced(month, day_gan_idx, hour_zhi_idx, (day_gan_idx + 2) % 12, (day_gan_idx * 2 + hour_zhi_idx) % 10)
 }
 
-/// 基于太阳平黄经/视黄经或精密时间戳计算真实节气索引与用局
+/// 基于太阳平黄经/视黄经或精密时间戳计算真实节气索引与用局（默认时区 UTC+8）
 pub fn get_exact_qimen_jieqi(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> usize {
+    get_exact_qimen_jieqi_tz(year, month, day, hour, minute, second, 8.0)
+}
+
+/// 修复 P1-14：可指定时区偏移（小时，相对 UTC）的节气索引计算。
+pub fn get_exact_qimen_jieqi_tz(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32, tz_offset_hours: f64) -> usize {
     let jdn_local = crate::bazi_exact::to_julian_day(year, month, day, hour, minute, second);
-    let jdn_utc = jdn_local - 8.0 / 24.0;
+    let jdn_utc = jdn_local - tz_offset_hours / 24.0;
     let sun_lon = crate::bazi_exact::sun_ecliptic_longitude(jdn_utc);
     // 冬至为黄经 270°，对应 JIEQI_JU_TABLE 的第 0 项
     // 每个节气跨越 15° 视黄经
